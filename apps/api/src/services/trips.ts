@@ -1,3 +1,4 @@
+import { userCan } from './roles';
 import type { Request } from 'express';
 import {
   allowedTransitions, findTransition, roleCanTarget, REQUIRED_DRIVER_DOCS, REQUIRED_VEHICLE_DOCS, DOC_TYPE_LABELS,
@@ -8,7 +9,7 @@ import { AppError, conflict, forbidden, notFound, unprocessable, badRequest } fr
 import crypto from 'node:crypto';
 import { buildSyntheticRoute, demoFreightPerMt, haversineKm, LatLng } from '../lib/geo';
 import { addEvent, assertEarlierStopsResolved, deliveredSoFar, listStops, recomputeTotals } from './tripStops';
-import { can, LOADING_LOCATION_TYPES } from '@gasman/shared';
+import { LOADING_LOCATION_TYPES } from '@gasman/shared';
 import { postHooks } from './hooks';
 import { setting } from './settings';
 import { tripEconomics } from './expenses';
@@ -666,7 +667,7 @@ export async function getTripDetail(id: number, user: AuthUser) {
     q<any>(`SELECT c.id, c.kind, c.result, c.items, c.notes, c.completed_at, u.full_name AS completed_by_name
               FROM safety_checks c LEFT JOIN users u ON u.id = c.completed_by WHERE c.trip_id = :id ORDER BY c.completed_at DESC`, { id }),
   ]);
-  const canFin = can(user.role, 'finance:view');
+  const canFin = userCan(user, 'finance:view');
   const stops = await listStops(id);
   const [expenses, fuel, econ] = await Promise.all([
     q<any>(`SELECT x.id, x.category, x.amount, x.nights, x.description, x.receipt_no, x.incurred_on, x.status, x.decision_note, x.created_at, u.full_name AS submitted_by_name

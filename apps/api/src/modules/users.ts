@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { MODULE_MATRIX, ROLES, ROLE_LABELS, ROLE_PERMISSIONS } from '@gasman/shared';
+import { MODULE_MATRIX } from '@gasman/shared';
+import { allRoleCodes, listRoles, resolveRole } from '../services/roles';
 import { q, q1, exec } from '../db/sequelize';
-import { badRequest, conflict, notFound } from '../lib/errors';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
@@ -11,12 +12,17 @@ import { audit } from '../services/audit';
 export const usersRouter = Router();
 
 usersRouter.get('/roles', requirePerm('users:view'), wrap(async (_req, res) => {
-  const counts = await q<any>('SELECT role, count(*)::int AS n FROM users GROUP BY role');
-  res.json({
-    roles: ROLES.map((r) => ({ role: r, label: ROLE_LABELS[r], users: counts.find((c) => c.role === r)?.n ?? 0, permissions: ROLE_PERMISSIONS[r] })),
-    modules: MODULE_MATRIX,
-  });
+  res.json({ roles: await listRoles(), modules: MODULE_MATRIX });
 }));
+
+/** Nobody can hand out more access than they hold: only a super admin assigns super-admin or roles with permissions the assigner lacks. */
+async function assertCanAssign(actor: { roleCode: string; perms: ReadonlySet<string> }, roleCode: string) {
+  const role = await resolveRole(roleCode);
+  if (!role || !(await allRoleCodes()).includes(roleCode)) throw badRequest('Choose a valid role.', { fields: { role: 'Unknown role' } });
+  if (actor.roleCode === 'SUPER_ADMIN') return role;
+  if (roleCode === 'SUPER_ADMIN' || [...role.perms].some((p) => !actor.perms.has(p))) throw forbidden('You cannot assign a role with more access than your own.');
+  return role;
+}
 
 usersRouter.get('/', requirePerm('users:view'), wrap(async (req, res) => {
   const p = paging(req.query);
@@ -37,7 +43,7 @@ usersRouter.get('/', requirePerm('users:view'), wrap(async (req, res) => {
 const body = z.object({
   email: z.string().trim().email().max(190),
   fullName: z.string().trim().min(2).max(120),
-  role: z.enum(ROLES),
+  role: z.string().trim().min(2).max(30),
   phone: z.string().trim().max(30).optional().nullable(),
   driverId: z.coerce.number().int().positive().optional().nullable(),
   password: z.string().min(10, 'Use at least 10 characters.').max(100),
@@ -46,10 +52,11 @@ const body = z.object({
 
 usersRouter.post('/', requirePerm('users:manage'), wrap(async (req, res) => {
   const b = parse(body, req.body);
-  if (b.role === 'DRIVER' && !b.driverId) throw badRequest('Link driver accounts to a driver profile.', { fields: { driverId: 'Required for driver role' } });
+  const assigned = await assertCanAssign(req.user!, b.role);
+  if (assigned.baseRole === 'DRIVER' && !b.driverId) throw badRequest('Link driver accounts to a driver profile.', { fields: { driverId: 'Required for driver role' } });
   if (await q1('SELECT 1 AS x FROM users WHERE lower(email) = lower(:e)', { e: b.email })) throw conflict('A user with this email already exists.');
   const row = await q1<any>(`INSERT INTO users (email, password_hash, full_name, role, phone, driver_id, status) VALUES (:e, :h, :n, :r, :p, :d, :s) RETURNING id, email, full_name, role, status`,
-    { e: b.email.toLowerCase(), h: await bcrypt.hash(b.password, 10), n: b.fullName, r: b.role, p: b.phone ?? null, d: b.role === 'DRIVER' ? b.driverId : null, s: b.status ?? 'ACTIVE' });
+    { e: b.email.toLowerCase(), h: await bcrypt.hash(b.password, 10), n: b.fullName, r: b.role, p: b.phone ?? null, d: assigned.baseRole === 'DRIVER' ? b.driverId : null, s: b.status ?? 'ACTIVE' });
   await audit(req, { action: 'CREATE', entityType: 'USER', entityId: row.id, entityLabel: row.email, meta: { role: b.role } });
   res.status(201).json({ user: row });
 }));
@@ -59,6 +66,8 @@ usersRouter.patch('/:id', requirePerm('users:manage'), wrap(async (req, res) => 
   const b = parse(body.partial().omit({ email: true }), req.body);
   const cur = await q1<any>('SELECT * FROM users WHERE id = :id', { id: uid });
   if (!cur) throw notFound('User');
+  if (cur.role === 'SUPER_ADMIN' && req.user!.roleCode !== 'SUPER_ADMIN') throw forbidden('Only a super admin can change a super admin account.');
+  if (b.role) await assertCanAssign(req.user!, b.role);
   if (uid === req.user!.id && (b.status === 'DISABLED' || (b.role && b.role !== cur.role))) throw conflict('You cannot disable or change the role of your own account.');
   const sets: string[] = []; const r: Record<string, unknown> = { id: uid };
   if (b.fullName) { sets.push('full_name = :n'); r.n = b.fullName; }

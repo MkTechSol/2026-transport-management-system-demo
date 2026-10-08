@@ -64,3 +64,6 @@ erDiagram
 3. No negative stock; no double-booked vehicle/driver; no posting into a closed fiscal year.
 4. Receipts cannot over-allocate an invoice; paid invoices cannot be voided without reversing receipts.
 5. Payroll runs lock once submitted; payment needs an approved, posted run.
+
+## Multi-drop trips (`trip_stops`)
+A trip has 1–8 ordered stops. `trips.destination_location_id` / `distributor_id` mirror the **final** stop, `trips.delivered_mt` is the sum over delivered stops and `trips.freight_per_mt` the quantity-weighted rate, so existing reports remain valid. Each stop carries planned/delivered MT, status (PENDING → ARRIVED → DELIVERED / SKIPPED), ETA, route fraction, POD fields, tariff and bill-to. Multi-stop trips use a composite `routes` row (`kind = 'MULTI'`, path = concatenated legs; direct routes stay unique per origin/destination). Intermediate stops are handled with `POST /trips/:id/stops/:stopId/{arrive|deliver|skip}`; the final stop uses the trip's Arrived / Delivered steps and requires earlier stops to be resolved. Billing creates one invoice per paying customer (`uq_si_trip` is per trip + customer) with a line per delivered stop. `custom_roles` holds super-admin-defined roles.

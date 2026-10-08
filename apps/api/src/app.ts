@@ -24,6 +24,7 @@ import { safetyRouter } from './modules/safety';
 import { trackingRouter } from './modules/tracking';
 import { tripsRouter } from './modules/trips';
 import { usersRouter } from './modules/users';
+import { rolesRouter } from './modules/roles';
 import { vehiclesRouter } from './modules/vehicles';
 import { routesRouter } from './modules/routes';
 import { expensesRouter } from './modules/expenses';
@@ -105,6 +106,7 @@ export function createApp() {
   api.use('/notifications', notificationsRouter);
   api.use('/audit-logs', auditRouter);
   api.use('/users', usersRouter);
+  api.use('/roles', rolesRouter);
   api.use('/demo', demoRouter);
   app.use('/api/v1', api);
 

@@ -1,6 +1,7 @@
+import { userCan } from '../services/roles';
 import { Router } from 'express';
 import { z } from 'zod';
-import { can, Permission } from '@gasman/shared';
+import { Permission } from '@gasman/shared';
 import { q } from '../db/sequelize';
 import { forbidden, badRequest } from '../lib/errors';
 import { listResponse, paging, parse, wrap } from '../lib/http';
@@ -132,7 +133,7 @@ const DEFS: Record<string, Def> = {
 };
 
 reportsRouter.get('/', requirePerm('reports:view'), wrap(async (req, res) => {
-  res.json({ reports: Object.entries(DEFS).filter(([, d]) => !d.perm || can(req.user!.role, d.perm)).map(([key, d]) => ({ key, title: d.title, description: d.description })) });
+  res.json({ reports: Object.entries(DEFS).filter(([, d]) => !d.perm || userCan(req.user!, d.perm)).map(([key, d]) => ({ key, title: d.title, description: d.description })) });
 }));
 
 const csvCell = (v: unknown) => { const s = v instanceof Date ? v.toISOString() : v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -140,7 +141,7 @@ const csvCell = (v: unknown) => { const s = v instanceof Date ? v.toISOString() 
 reportsRouter.get('/:type', requirePerm('reports:view'), wrap(async (req, res) => {
   const def = DEFS[req.params.type];
   if (!def) throw badRequest('Unknown report.');
-  if (def.perm && !can(req.user!.role, def.perm)) throw forbidden('Your role cannot view this report.');
+  if (def.perm && !userCan(req.user!, def.perm)) throw forbidden('Your role cannot view this report.');
   const p = paging(req.query);
   const today = new Date();
   const f = parse(z.object({
@@ -150,7 +151,7 @@ reportsRouter.get('/:type', requirePerm('reports:view'), wrap(async (req, res) =
   }), req.query);
   const { sql, r, order } = def.build(f);
   if (f.format === 'csv') {
-    if (!can(req.user!.role, 'reports:export')) throw forbidden('Your role cannot export reports.');
+    if (!userCan(req.user!, 'reports:export')) throw forbidden('Your role cannot export reports.');
     const rows = await q(`SELECT * FROM (${sql}) x ORDER BY ${order} LIMIT 10000`, r);
     const csv = [def.columns.map((c) => csvCell(c.label)).join(','), ...rows.map((row) => def.columns.map((c) => csvCell(row[c.key])).join(','))].join('\n');
     await audit(req, { action: 'REPORT_EXPORT', entityType: 'REPORT', entityLabel: def.title, meta: { rows: rows.length } });

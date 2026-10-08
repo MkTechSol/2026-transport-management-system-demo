@@ -4,7 +4,7 @@ import { q, q1, exec } from '../db/sequelize';
 import { badRequest, conflict, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 import { audit } from '../services/audit';
 import { postStockDoc, STOCK_DOC_LABELS } from '../services/stock';
 
@@ -156,7 +156,7 @@ const docBody = z.object({
 });
 inventoryRouter.post('/docs', requirePerm('inventory:manage'), wrap(async (req, res) => {
   const b = parse(docBody, req.body);
-  if (b.type === 'PURCHASE' || b.type === 'PURCHASE_RETURN') { if (!can(req.user!.role, 'procurement:manage') && req.user!.role !== 'SUPER_ADMIN') throw badRequest('Purchases need procurement permission.'); }
+  if (b.type === 'PURCHASE' || b.type === 'PURCHASE_RETURN') { if (!userCan(req.user!, 'procurement:manage') && req.user!.role !== 'SUPER_ADMIN') throw badRequest('Purchases need procurement permission.'); }
   const doc = await postStockDoc(req.user!, req, b);
   res.status(201).json({ doc });
 }));

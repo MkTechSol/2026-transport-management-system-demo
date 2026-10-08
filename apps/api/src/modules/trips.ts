@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { LPG_SOURCES, PRIORITIES, TRIP_STATUSES, TripStatus } from '@gasman/shared';
 import { q, q1, exec, sequelize } from '../db/sequelize';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 import { forbidden, notFound, unprocessable } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
@@ -100,7 +100,7 @@ tripsRouter.get('/route-preview', requirePerm('trips:create'), wrap(async (req, 
   const plan = await sequelize.transaction((tx) => planStops(tx, b.originId, ids.map((locationId) => ({ locationId, plannedMt: 1 })), { requireActiveDistributor: false }));
   const r = plan.route;
   res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min, freightPerMt: ids.length === 1 ? r.freight_per_mt : null },
-    stops: plan.rows.map((x) => ({ seq: x.seq, locationId: x.locationId, etaMin: x.etaMin, routeFrac: x.routeFrac, freightPerMt: can(req.user!.role, 'finance:view') ? x.freightPerMt : undefined })) });
+    stops: plan.rows.map((x) => ({ seq: x.seq, locationId: x.locationId, etaMin: x.etaMin, routeFrac: x.routeFrac, freightPerMt: userCan(req.user!, 'finance:view') ? x.freightPerMt : undefined })) });
 }));
 
 tripsRouter.post('/', requirePerm('trips:create'), wrap(async (req, res) => {

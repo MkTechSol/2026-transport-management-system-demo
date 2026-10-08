@@ -96,6 +96,26 @@ Action:              One ledger and one RBAC model across operations, finance, s
 Status:              done
 
 ---
+## Feedback #009
+Date: _recorded during build_
+Source:              Message: "add multiple trip destinations for one trip — a vehicle from A to B, C, D — and manage them properly everywhere"
+Module:              Trips, dispatch, tracking, billing, reports
+Problem / request:   One trip had exactly one destination.
+Decision:            Accept
+Action:              Multi-drop trips (up to 8 ordered delivery stops, `trip_stops`): per-stop quantity, ETA (incl. unloading time, setting `trip.stopDwellMin`), arrive / deliver / skip with POD, load-on-board checks, composite route and map markers, simulator pauses at each stop, one invoice per customer with a line per delivered stop, weighted trip freight rate, customer pages and reports count each drop, public tracking shows stop progress by city, POD register report. Uplifting trips stay single-destination.
+Status:              done
+
+---
+## Feedback #010
+Date: _recorded during build_
+Source:              Message: "as super admin we can create roles and add proper permissions (checkboxes), select-all and category-wise"
+Module:              Users & roles
+Problem / request:   Roles were fixed in code.
+Decision:            Accept
+Action:              Users & roles → Manage roles (super admin only): create/edit/delete custom roles, tick permissions individually, per module or all at once. Enforced server-side (cache of a few seconds); built-in roles stay fixed (duplicate to customise); a role cannot be deleted while in use; nobody can assign a role with more access than their own.
+Status:              done
+
+---
 ## Template for new entries
 ```
 ## Feedback #NNN

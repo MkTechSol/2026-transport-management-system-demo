@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { ROLE_PERMISSIONS } from '@gasman/shared';
+import { resolveRole } from '../services/roles';
 import { config } from '../config';
 import { exec, q1 } from '../db/sequelize';
 import { AppError, unauthorized } from '../lib/errors';
@@ -25,19 +25,22 @@ const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 10);
 const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const COOKIE = 'gm_refresh';
 
-function userPayload(u: any) {
+async function userPayload(u: any) {
+  const r = await resolveRole(u.role);
   return {
     id: u.id,
     email: u.email,
     name: u.full_name,
-    role: u.role,
+    role: r?.baseRole ?? u.role,
+    roleCode: u.role,
+    roleLabel: r?.label ?? u.role,
     driverId: u.driver_id ?? null,
-    permissions: ROLE_PERMISSIONS[u.role as keyof typeof ROLE_PERMISSIONS] ?? [],
+    permissions: [...(r?.perms ?? [])],
   };
 }
 
 async function issueTokens(res: Response, u: any, familyId: string, ua?: string) {
-  const authUser: AuthUser = { id: u.id, email: u.email, name: u.full_name, role: u.role, driverId: u.driver_id ?? null };
+  const authUser: AuthUser = { id: u.id, email: u.email, name: u.full_name, role: u.role, roleCode: u.role, perms: new Set<string>(), driverId: u.driver_id ?? null };
   const accessToken = signAccessToken(authUser);
   const refreshToken = crypto.randomBytes(40).toString('base64url');
   await exec(
@@ -83,7 +86,7 @@ authRouter.post(
     await exec('UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = :id', { id: u.id });
     const tokens = await issueTokens(res, u, crypto.randomUUID(), req.headers['user-agent']);
     await audit(req, { userId: u.id, email: u.email, action: 'LOGIN', entityType: 'USER', entityId: u.id, entityLabel: u.full_name });
-    res.json({ ...tokens, user: userPayload(u) });
+    res.json({ ...tokens, user: await userPayload(u) });
   }),
 );
 
@@ -105,7 +108,7 @@ authRouter.post(
     if (!u || u.status !== 'ACTIVE') throw unauthorized();
     await exec('UPDATE refresh_tokens SET revoked_at = now() WHERE id = :id', { id: row.id });
     const tokens = await issueTokens(res, u, row.family_id, req.headers['user-agent']);
-    res.json({ ...tokens, user: userPayload(u) });
+    res.json({ ...tokens, user: await userPayload(u) });
   }),
 );
 
@@ -125,7 +128,7 @@ authRouter.get(
   wrap(async (req, res) => {
     const u = await q1<any>('SELECT * FROM users WHERE id = :id', { id: req.user!.id });
     if (!u || u.status !== 'ACTIVE') throw unauthorized();
-    res.json({ user: userPayload(u) });
+    res.json({ user: await userPayload(u) });
   }),
 );
 

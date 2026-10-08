@@ -66,9 +66,10 @@ await step('T5 Driver profile opens with licence & trip history', async () => {
 await step('T6 Create a trip with the wizard (route, load, schedule, review)', async () => {
   await A.goto(`${BASE}/trips/new`); await A.getByText('What kind of trip is this?').waitFor();
   await A.getByPlaceholder(/Search distributor/).fill('Peshawar'); await A.getByRole('listbox').getByRole('option').first().click();
+  await A.getByLabel('Stop 1 quantity in MT').fill('8');
   await A.getByText('driving time').waitFor();
   await A.getByRole('button', { name: /Continue/ }).click();
-  await A.getByLabel(/Planned load/).fill('8'); await A.getByRole('button', { name: /Continue/ }).click();
+  await A.getByText('Planned load (from the stops)').waitFor(); await A.getByRole('button', { name: /Continue/ }).click();
   await A.getByText('Review', { exact: true }).first().waitFor();
   await A.screenshot({ path: `${shots}/e2e-03-wizard-review.png` });
   await A.getByRole('button', { name: 'Create & assign vehicle' }).click();
@@ -303,6 +304,35 @@ await step('T37 Manager mobile home on a phone: approvals with big buttons', asy
   await M2.goto(`${BASE}/m`); await M2.getByText('Active trips').waitFor(); await M2.getByText(/Waiting for your decision/).waitFor();
   const w = await M2.evaluate(() => document.documentElement.scrollWidth); if (w > 395) throw new Error('horizontal scroll on phone: ' + w);
   await M2.screenshot({ path: `${shots}/e2e-16-manager-mobile.png` });
+});
+
+await step('T38 Multi-drop trip: A → B, C with per-stop quantities, then stop timeline', async () => {
+  await A.goto(`${BASE}/trips/new`); await A.getByText('What kind of trip is this?').waitFor();
+  await A.getByPlaceholder(/Search distributor/).fill('Peshawar'); await A.getByRole('listbox').getByRole('option', { name: /Peshawar/ }).first().click();
+  await A.getByLabel('Stop 1 quantity in MT').fill('6');
+  await A.getByRole('button', { name: /Add another delivery point/ }).click();
+  await A.getByPlaceholder(/Search distributor/).fill('Mardan'); await A.getByRole('listbox').getByRole('option', { name: /Mardan/ }).first().click();
+  await A.getByLabel('Stop 2 quantity in MT').fill('5');
+  await A.getByText(/including unloading at each stop/).waitFor(); await A.getByText(/Total load/).waitFor();
+  await A.getByRole('button', { name: /Continue/ }).click(); await A.getByRole('button', { name: /Continue/ }).click();
+  await A.getByText('Delivery stops (2)').waitFor();
+  await A.screenshot({ path: `${shots}/e2e-17-multidrop-review.png` });
+  await A.getByRole('button', { name: 'Save as draft' }).click();
+  await A.getByRole('heading', { name: /^TRP-/ }).waitFor({ timeout: 10000 });
+  await A.getByText('2 stops').first().waitFor(); await A.getByText('Delivery stops (2)').waitFor();
+  await A.screenshot({ path: `${shots}/e2e-18-multidrop-detail.png` });
+});
+await step('T39 Super admin builds a custom role with checkboxes (select all / per module)', async () => {
+  const { page: S } = await session('superadmin@gasman-demo.local');
+  await S.goto(`${BASE}/users?tab=roles`); await S.getByRole('button', { name: 'New role' }).click();
+  await S.getByLabel(/Role name/).fill(`E2E Billing Viewer ${Date.now() % 100000}`);
+  await S.getByLabel(/^Select all/).check(); await S.getByLabel(/^Select all/).uncheck();
+  await S.getByRole('checkbox', { name: 'Sales & Invoicing' }).check();
+  await S.getByRole('checkbox', { name: 'Control Tower' }).check();
+  await S.getByRole('button', { name: 'Save role' }).click(); await S.getByText('Role saved.').waitFor();
+  await S.getByRole('checkbox', { name: 'Manage', exact: true }).first().waitFor();
+  await S.screenshot({ path: `${shots}/e2e-19-role-builder.png` });
+  S.once('dialog', (d) => d.accept()); await S.getByRole('button', { name: 'Delete' }).click(); await S.getByText('Role deleted.').waitFor();
 });
 
 await browser.close();

@@ -1,4 +1,6 @@
-import { can, type Permission, type Role } from '@gasman/shared';
+import type { Permission } from '@gasman/shared';
+import { userCan } from './roles';
+type Actor = { perms: ReadonlySet<string> };
 import { q } from '../db/sequelize';
 
 export interface ExceptionItem { key: string; rule: string; severity: 'CRITICAL' | 'WARNING' | 'INFO'; category: string; title: string; detail: string; link: string; since: string | null; amount?: number }
@@ -40,11 +42,11 @@ export const RULES: Rule[] = [
     key: `tyre-wear:${r.id}`, severity: (r.km > 90000 ? 'WARNING' : 'INFO') as 'WARNING' | 'INFO', title: `${r.code} tyre ${r.serial_no} (${r.position}) has run ${r.km.toLocaleString('en-US')} km`, detail: 'Inspect for wear; plan a change or retread.', link: `/tyres?tab=map&vehicle=${r.vid}`, since: null })) },
 ];
 
-export async function computeExceptions(role: Role, includeAcked = false) {
+export async function computeExceptions(actor: Actor, includeAcked = false) {
   const acks = new Map((await q<any>('SELECT a.key, a.note, a.acked_at, u.full_name AS by FROM exception_acks a LEFT JOIN users u ON u.id = a.acked_by')).map((a: any) => [a.key, a]));
   const all: (ExceptionItem & { acked?: any })[] = [];
   for (const r of RULES) {
-    if (!can(role, r.perm)) continue;
+    if (!userCan(actor, r.perm)) continue;
     for (const x of await r.run()) {
       const ack = acks.get(x.key);
       if (ack && !includeAcked) continue;

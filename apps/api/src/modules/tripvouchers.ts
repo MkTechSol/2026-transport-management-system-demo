@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 import { q } from '../db/sequelize';
 import { notFound } from '../lib/errors';
 import { parse, wrap } from '../lib/http';
@@ -72,14 +72,14 @@ const REPORTS: Record<string, { title: string; group: string; perm?: 'expenses';
 };
 
 tripVouchersRouter.get('/reports', requirePerm('trips:view'), wrap(async (req, res) => {
-  const ex = can(req.user!.role, 'expenses:view');
+  const ex = userCan(req.user!, 'expenses:view');
   res.json({ data: Object.entries(REPORTS).filter(([, r]) => !r.perm || ex).map(([key, r]) => ({ key, title: r.title, group: r.group })) });
 }));
 tripVouchersRouter.get('/reports/:key', requirePerm('trips:view'), wrap(async (req, res) => {
   const def = REPORTS[String(req.params.key)]; if (!def) throw notFound('Report');
-  if (def.perm === 'expenses' && !can(req.user!.role, 'expenses:view')) throw notFound('Report');
+  if (def.perm === 'expenses' && !userCan(req.user!, 'expenses:view')) throw notFound('Report');
   const f = parse(z.object({ from: dateStr.optional(), to: dateStr.optional(), vehicleId: z.coerce.number().optional(), driverId: z.coerce.number().optional() }), req.query);
   const own = req.user!.role === 'DRIVER' ? req.user!.driverId ?? -1 : f.driverId;
   const to = f.to ?? today(); const from = f.from ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  res.json(await def.run({ from, to, vehicleId: f.vehicleId, driverId: own, finance: can(req.user!.role, 'finance:view'), expenses: can(req.user!.role, 'expenses:view') }));
+  res.json(await def.run({ from, to, vehicleId: f.vehicleId, driverId: own, finance: userCan(req.user!, 'finance:view'), expenses: userCan(req.user!, 'expenses:view') }));
 }));

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Permission, Role } from '@gasman/shared';
 import { api, post, refreshSession, setAccessToken, setAuthLostHandler } from './api';
 
-export interface SessionUser { id: number; email: string; name: string; role: Role; driverId: number | null; permissions: Permission[] }
+export interface SessionUser { id: number; email: string; name: string; role: Role; roleCode: string; roleLabel: string; driverId: number | null; permissions: Permission[] }
 interface AuthCtx {
   user: SessionUser | null;
   loading: boolean;

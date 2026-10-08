@@ -10,13 +10,13 @@ export const exceptionsRouter = Router();
 
 exceptionsRouter.get('/', requirePerm('exceptions:view'), wrap(async (req, res) => {
   const includeAcked = req.query.acked === '1';
-  const all = await computeExceptions(req.user!.role, includeAcked);
+  const all = await computeExceptions(req.user!, includeAcked);
   const counts = { CRITICAL: 0, WARNING: 0, INFO: 0 } as Record<string, number>; const byCategory: Record<string, number> = {};
   for (const e of all.filter((x) => !x.acked)) { counts[e.severity]++; byCategory[e.category] = (byCategory[e.category] ?? 0) + 1; }
   res.json({ data: all, counts, byCategory, total: all.filter((x) => !x.acked).length });
 }));
 exceptionsRouter.get('/count', requirePerm('exceptions:view'), wrap(async (req, res) => {
-  const all = await computeExceptions(req.user!.role);
+  const all = await computeExceptions(req.user!);
   res.json({ critical: all.filter((x) => x.severity === 'CRITICAL').length, total: all.length });
 }));
 exceptionsRouter.post('/ack', requirePerm('exceptions:view'), wrap(async (req, res) => {

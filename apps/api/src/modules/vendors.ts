@@ -5,7 +5,7 @@ import { conflict, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 
 export const vendorsRouter = Router();
 const CATS = ['SUPPLIER', 'TRANSPORTER', 'WORKSHOP', 'FUEL_STATION', 'REFINERY', 'SERVICE', 'OTHER'] as const;
@@ -18,7 +18,7 @@ vendorsRouter.get('/', requirePerm('vendors:view'), wrap(async (req, res) => {
   if (req.query.active === '1') where.push('v.active');
   if (p.q) { where.push('(v.name ILIKE :q OR v.code ILIKE :q OR v.city ILIKE :q)'); r.q = likeTerm(p.q); }
   const from = `FROM vendors v WHERE ${where.join(' AND ')}`;
-  const canFinance = can(req.user!.role, 'finance:view');
+  const canFinance = userCan(req.user!, 'finance:view');
   const [rows, [{ total }]] = await Promise.all([
     q(`SELECT v.*${canFinance ? `, COALESCE((SELECT sum(l.credit - l.debit) FROM party_balances l WHERE l.party_type = 'VENDOR' AND l.party_id = v.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'payable')), 0)::float AS payable` : ''}
         ${from} ORDER BY v.name LIMIT :lim OFFSET :off`, r),

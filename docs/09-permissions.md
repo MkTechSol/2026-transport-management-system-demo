@@ -46,3 +46,10 @@
 - A vehicle/driver cannot be assigned if: unavailable, in maintenance, inactive, double-booked in the time window, capacity < load, or a required document is missing / expired / expires before the trip ends.
 - Trip status changes follow the state machine in `packages/shared/src/tripMachine.ts`; every change writes a trip event + audit entry.
 - Starting a trip requires a passed pre-trip safety check (configurable, `REQUIRE_PRETRIP_CHECK`; **demo assumption**).
+
+## Custom roles (super admin)
+- **Users & roles → Manage roles** lets the super admin create roles and tick permissions: *Select all*, per-module (category) tick-boxes, or individual permissions. `demo:reset` can never be granted.
+- Each custom role has a **"works like"** built-in role (not super admin). It supplies the workflow behaviour that is not a permission — trip step rules, approval routing, notification audience and driver-style "own data only" scoping. Everything a role can open or change comes from its ticked permissions.
+- Built-in roles are fixed (duplicate one to start a custom role). A role in use cannot be deleted. Edits apply within a few seconds, without users signing in again.
+- Anti-escalation: only a super admin can assign Super admin or a role containing permissions the assigner does not hold, or change a super-admin account. Role management itself is super-admin only (not a delegable permission).
+- Deleted/unknown roles resolve to no access (401 on the next request).

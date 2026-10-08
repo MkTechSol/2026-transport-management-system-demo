@@ -5,7 +5,7 @@ import { parse, wrap } from '../lib/http';
 import { TtlCache } from '../lib/cache';
 import { currentDocSql, localDate, TODAY_START } from '../lib/sql';
 import { requirePerm } from '../middleware/auth';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 
 export const dashboardRouter = Router();
 export const dashboardCache = new TtlCache<any>(4000);
@@ -145,7 +145,7 @@ dashboardRouter.get('/', requirePerm('dashboard:view'), wrap(async (req, res) =>
   // Money figures are role-gated and never stored in the shared (all-roles) cache entry.
   const extra: Record<string, unknown> = {};
   extra.activity = await financeCache.get('act', () => q(`SELECT e.occurred_at, e.type, e.message, t.id AS trip_id, t.code, v.code AS vehicle FROM trip_events e JOIN trips t ON t.id = e.trip_id LEFT JOIN vehicles v ON v.id = t.vehicle_id WHERE e.type NOT IN ('CHECKPOINT') ORDER BY e.occurred_at DESC, e.id DESC LIMIT 8`));
-  if (can(req.user!.role, 'inventory:view')) extra.inventory = await financeCache.get('inv', () => inventoryBlock() as any);
-  if (can(req.user!.role, 'finance:view')) extra.finance = await financeCache.get(`f:${plantId ?? 'all'}`, () => financeBlock(plantId));
+  if (userCan(req.user!, 'inventory:view')) extra.inventory = await financeCache.get('inv', () => inventoryBlock() as any);
+  if (userCan(req.user!, 'finance:view')) extra.finance = await financeCache.get(`f:${plantId ?? 'all'}`, () => financeBlock(plantId));
   res.json({ ...base, ...extra });
 }));

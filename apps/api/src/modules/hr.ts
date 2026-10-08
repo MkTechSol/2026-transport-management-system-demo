@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { can } from '@gasman/shared';
+import { userCan } from '../services/roles';
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { badRequest, conflict, notFound, unprocessable } from '../lib/errors';
 import { id, likeTerm, listResponse, paging, parse, wrap } from '../lib/http';
@@ -18,7 +18,7 @@ hrRouter.get('/summary', requirePerm('hr:view'), wrap(async (req, res) => {
   const [s] = await q(`SELECT (SELECT count(*)::int FROM employees WHERE status = 'ACTIVE') AS headcount,
       (SELECT count(*)::int FROM attendance WHERE work_date = :d AND status IN ('P','H')) AS present_today, (SELECT count(*)::int FROM attendance WHERE work_date = :d AND status = 'A') AS absent_today, (SELECT count(*)::int FROM attendance WHERE work_date = :d AND status = 'L') AS on_leave_today,
       (SELECT count(*)::int FROM leave_requests WHERE status = 'PENDING') AS pending_leave`, { d: day });
-  const payroll = can(req.user!.role, 'payroll:manage') ? await q1(`SELECT period, status, net::float AS net FROM payroll_runs ORDER BY period DESC LIMIT 1`) : null;
+  const payroll = userCan(req.user!, 'payroll:manage') ? await q1(`SELECT period, status, net::float AS net FROM payroll_runs ORDER BY period DESC LIMIT 1`) : null;
   res.json({ ...s, payroll });
 }));
 
@@ -42,7 +42,7 @@ hrRouter.get('/employees', requirePerm('hr:view'), wrap(async (req, res) => {
   if (f.type) { where.push('e.employee_type = :type'); r.type = f.type; }
   where.push(`e.status = :st`); r.st = f.status ?? 'ACTIVE';
   if (p.q) { where.push('(e.full_name ILIKE :q OR e.code ILIKE :q OR e.designation ILIKE :q)'); r.q = likeTerm(p.q); }
-  const pay = can(req.user!.role, 'payroll:manage');
+  const pay = userCan(req.user!, 'payroll:manage');
   const from = `FROM employees e LEFT JOIN departments d ON d.id = e.department_id WHERE ${where.join(' AND ')}`;
   const [rows, [{ total }]] = await Promise.all([
     q(`SELECT e.id, e.code, e.full_name, e.designation, e.employee_type, e.phone, e.joined_on, e.status, e.driver_id, d.name AS department ${pay ? ', e.basic_salary::float, e.allowances::float, e.trip_rate::float, e.bank_name, e.bank_account' : ''} ${from} ORDER BY e.full_name LIMIT :lim OFFSET :off`, r),
@@ -52,7 +52,7 @@ hrRouter.get('/employees', requirePerm('hr:view'), wrap(async (req, res) => {
 }));
 hrRouter.post('/employees', requirePerm('hr:manage'), wrap(async (req, res) => {
   const b = parse(empBody, req.body);
-  if ((b.basicSalary || b.allowances || b.tripRate) && !can(req.user!.role, 'payroll:manage')) throw badRequest('Only payroll managers can set salary figures.');
+  if ((b.basicSalary || b.allowances || b.tripRate) && !userCan(req.user!, 'payroll:manage')) throw badRequest('Only payroll managers can set salary figures.');
   const n = await q1<any>('SELECT count(*)::int + 1 AS n FROM employees');
   const row = await q1<any>(`INSERT INTO employees (code, full_name, department_id, designation, employee_type, driver_id, phone, joined_on, basic_salary, allowances, trip_rate, bank_name, bank_account)
     VALUES (:c, :n, :d, :des, :t, :dr, :ph, :j, :b, :a, :tr, :bn, :ba) RETURNING id, code, full_name`,
@@ -63,7 +63,7 @@ hrRouter.post('/employees', requirePerm('hr:manage'), wrap(async (req, res) => {
 hrRouter.patch('/employees/:id', requirePerm('hr:manage'), wrap(async (req, res) => {
   const b = parse(empBody.partial().extend({ status: z.enum(['ACTIVE', 'LEFT']).optional() }), req.body);
   const salary = b.basicSalary !== undefined || b.allowances !== undefined || b.tripRate !== undefined;
-  if (salary && !can(req.user!.role, 'payroll:manage')) throw badRequest('Only payroll managers can change salary figures.');
+  if (salary && !userCan(req.user!, 'payroll:manage')) throw badRequest('Only payroll managers can change salary figures.');
   const row = await q1<any>(`UPDATE employees SET full_name = COALESCE(:n, full_name), department_id = COALESCE(:d, department_id), designation = COALESCE(:des, designation), phone = COALESCE(:ph, phone), basic_salary = COALESCE(:b, basic_salary), allowances = COALESCE(:a, allowances),
       trip_rate = COALESCE(:tr, trip_rate), bank_name = COALESCE(:bn, bank_name), bank_account = COALESCE(:ba, bank_account), status = COALESCE(:st, status) WHERE id = :id RETURNING id, code, full_name`,
     { n: b.fullName ?? null, d: b.departmentId ?? null, des: b.designation ?? null, ph: b.phone ?? null, b: b.basicSalary ?? null, a: b.allowances ?? null, tr: b.tripRate ?? null, bn: b.bankName ?? null, ba: b.bankAccount ?? null, st: b.status ?? null, id: id(req) });

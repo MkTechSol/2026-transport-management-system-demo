@@ -98,7 +98,7 @@ function UserMenu() {
     <div ref={ref} className="relative">
       <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2.5 rounded-lg p-1 pr-2 hover:bg-white/15" aria-haspopup="menu" aria-expanded={open}>
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-xs font-bold text-brand-700">{initials}</span>
-        <span className="hidden text-left leading-tight md:block"><span className="block text-sm font-semibold text-white">{user!.name}</span><span className="block text-[11px] text-white/75">{ROLE_LABELS[user!.role]}</span></span>
+        <span className="hidden text-left leading-tight md:block"><span className="block text-sm font-semibold text-white">{user!.name}</span><span className="block text-[11px] text-white/75">{user!.roleLabel ?? ROLE_LABELS[user!.role]}</span></span>
         <ChevronDown className="hidden h-4 w-4 text-white/70 md:block" />
       </button>
       {open && (

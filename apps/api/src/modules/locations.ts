@@ -1,6 +1,7 @@
+import { userCan } from '../services/roles';
 import { Router } from 'express';
 import { z } from 'zod';
-import { CUSTOMER_TYPES, LOCATION_TYPES, REGIONS, can } from '@gasman/shared';
+import { CUSTOMER_TYPES, LOCATION_TYPES, REGIONS } from '@gasman/shared';
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { conflict, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
@@ -121,7 +122,7 @@ distributorsRouter.get('/', requirePerm('distributors:view', 'trips:view'), wrap
   if (f.status) { where.push('d.status = :status'); r.status = f.status; }
   if (f.customerType) { where.push('d.customer_type = :ctype'); r.ctype = f.customerType; }
   const w = where.join(' AND ');
-  const showBal = can(req.user!.role, 'sales:view');
+  const showBal = userCan(req.user!, 'sales:view');
   if (f.compact) { // typeahead source for the trip wizard
     const rows = await q(`SELECT d.id, d.code, d.name, d.city, d.region, d.status, d.location_id FROM distributors d WHERE ${w} AND d.status = 'ACTIVE' ORDER BY d.name LIMIT 30`, r);
     return res.json({ data: rows });

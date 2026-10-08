@@ -27,3 +27,9 @@ Real chart of accounts and opening balances · tariff table · approval limits �
 ## Dependency audit (`npm audit`)
 Production dependencies report 4 *moderate* advisories, all one chain: `uuid` < 11.1.1 (missing buffer bounds check in `v3/v5/v6` when a caller passes a `buf`) pulled in by `sequelize`. The API only uses Sequelize for connection pooling and never calls uuid with a caller-supplied buffer, so the advisory is not reachable. The suggested "fix" downgrades Sequelize to 3.x, which would break the application; we track the upstream release instead. Re-run `npm audit` before go-live.
 Including dev dependencies, `npm audit` lists further advisories (test runner, bundler and dev-server tooling such as vitest/esbuild/braces). These packages are **not** in the production images (the API image installs runtime dependencies only; the web image serves static files from nginx) and the dev server must never be exposed to a network. They will be bumped as part of routine dependency maintenance before production.
+
+## Multi-drop and custom roles
+- Stop tariffs default to the direct origin→stop rate; the trip-level rate is a rounded weighted average (income reports can differ from invoices by a few rupees — invoices use exact per-stop amounts).
+- Gas not delivered at a skipped stop stays on board; there is no return-load or re-delivery workflow yet. Stops are served strictly in order.
+- Seeded history converts some completed trips to multi-drop on their original direct path; trips created in the app use composite routes.
+- Custom roles borrow workflow behaviour from a built-in "works like" role; approver routing can only name built-in roles.

@@ -1,7 +1,6 @@
 import { Check, Minus, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ROLES, ROLE_LABELS, Role } from '@gasman/shared';
 import { get, patch, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDateTime } from '../lib/format';
@@ -13,14 +12,18 @@ import { FilterSelect, SelectInput, TextInput } from '../ui/Form';
 import { Modal } from '../ui/Overlay';
 import { PageHeader, Section, Tabs } from '../ui/Page';
 import { Pill, StatusPill } from '../ui/Pill';
+import { RoleManager } from '../features/RoleManager';
 import { Column, DataTable, FilterBar, SearchInput } from '../ui/Table';
 
 export default function Users() {
-  const { can } = useAuth(); const { state, set, page } = useQueryState(); const tab = state.tab ?? 'users'; const [form, setForm] = useState<any | null | undefined>(undefined);
+  const { can, user } = useAuth(); const { state, set, page } = useQueryState(); const tab = state.tab ?? 'users'; const [form, setForm] = useState<any | null | undefined>(undefined);
+  const roles = useQuery({ queryKey: ['/users', 'roles'], queryFn: () => get('/users/roles') });
+  const roleList: { role: string; label: string }[] = roles.data?.roles ?? [];
+  const roleName = (c: string) => roleList.find((r) => r.role === c)?.label ?? c.replace(/_/g, ' ');
   const { data, isLoading, error, refetch } = useList('/users', { page, pageSize: 15, q: state.q, role: state.role });
   const cols: Column<any>[] = [
     { key: 'n', header: 'User', render: (u) => <div><p className="font-semibold">{u.full_name}</p><p className="text-xs text-slate-500">{u.email}</p></div> },
-    { key: 'r', header: 'Role', render: (u) => <Pill tone={u.role === 'SUPER_ADMIN' ? 'purple' : 'blue'} dot={false}>{ROLE_LABELS[u.role as Role]}</Pill> },
+    { key: 'r', header: 'Role', render: (u) => <Pill tone={u.role === 'SUPER_ADMIN' ? 'purple' : 'blue'} dot={false}>{roleName(u.role)}</Pill> },
     { key: 'd', header: 'Linked driver', hideBelow: 'md', render: (u) => u.driver_name ?? '—' },
     { key: 'l', header: 'Last sign-in', hideBelow: 'lg', render: (u) => fmtDateTime(u.last_login_at) },
     { key: 's', header: 'Status', render: (u) => <StatusPill status={u.status} /> },
@@ -29,14 +32,15 @@ export default function Users() {
   return (
     <>
       <PageHeader title="Users & Roles" subtitle="Access is enforced by the API — not just hidden in the UI" breadcrumbs={[{ label: 'Administration' }, { label: 'Users & roles' }]} actions={can('users:manage') && <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setForm(null)}>Add user</Button>} />
-      <Tabs value={tab} onChange={(k) => set({ tab: k })} tabs={[{ key: 'users', label: 'Users' }, { key: 'matrix', label: 'Permission matrix' }]} />
+      <Tabs value={tab} onChange={(k) => set({ tab: k })} tabs={[{ key: 'users', label: 'Users' }, { key: 'matrix', label: 'Permission matrix' }, ...(user?.roleCode === 'SUPER_ADMIN' ? [{ key: 'roles', label: 'Manage roles' }] : [])]} />
       {tab === 'users' && <>
         <FilterBar><SearchInput className="w-full sm:w-72" value={state.q ?? ''} onChange={(v) => set({ q: v })} placeholder="Search name or email…" />
-          <FilterSelect label="Role" value={state.role ?? 'ALL'} onChange={(v) => set({ role: v })} options={[{ value: 'ALL', label: 'All roles' }, ...ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))]} /></FilterBar>
+          <FilterSelect label="Role" value={state.role ?? 'ALL'} onChange={(v) => set({ role: v })} options={[{ value: 'ALL', label: 'All roles' }, ...roleList.map((r) => ({ value: r.role, label: r.label }))]} /></FilterBar>
         <DataTable columns={cols} rows={data?.data} loading={isLoading} error={error} onRetry={() => refetch()} rowKey={(u) => u.id} page={page} pageSize={15} total={data?.meta.total ?? 0} onPage={(p) => set({ page: p }, false)} empty={{ title: 'No users' }} />
       </>}
       {tab === 'matrix' && <Matrix />}
-      {form !== undefined && <UserForm user={form} onClose={() => { setForm(undefined); refetch(); }} />}
+      {tab === 'roles' && user?.roleCode === 'SUPER_ADMIN' && <RoleManager />}
+      {form !== undefined && <UserForm user={form} roles={roleList} onClose={() => { setForm(undefined); refetch(); }} />}
     </>
   );
 }
@@ -59,7 +63,7 @@ function Matrix() {
   );
 }
 
-function UserForm({ user, onClose }: { user: any | null; onClose: () => void }) {
+function UserForm({ user, roles, onClose }: { user: any | null; roles: { role: string; label: string }[]; onClose: () => void }) {
   const drivers = useDriverOptions();
   const [f, setF] = useState({ email: user?.email ?? '', fullName: user?.full_name ?? '', role: user?.role ?? 'DISPATCHER', driverId: String(user?.driver_id ?? ''), password: '', status: user?.status ?? 'ACTIVE' });
   const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
@@ -72,7 +76,7 @@ function UserForm({ user, onClose }: { user: any | null; onClose: () => void }) 
         {m.error && !m.error.fields && <div className="sm:col-span-2"><Alert tone="danger">{m.error.message}</Alert></div>}
         <TextInput label="Email" required type="email" value={f.email} onChange={set('email')} error={fe.email} disabled={!!user} wrapperClassName="sm:col-span-2" />
         <TextInput label="Full name" required value={f.fullName} onChange={set('fullName')} error={fe.fullName} />
-        <SelectInput label="Role" value={f.role} onChange={set('role')} options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))} />
+        <SelectInput label="Role" value={f.role} onChange={set('role')} options={roles.map((r) => ({ value: r.role, label: r.label }))} />
         {f.role === 'DRIVER' && <SelectInput label="Driver profile" required value={f.driverId} onChange={set('driverId')} error={fe.driverId} placeholder="Select driver" options={(drivers.data?.data ?? []).map((d: any) => ({ value: d.id, label: `${d.full_name} (${d.employee_id})` }))} wrapperClassName="sm:col-span-2" />}
         <TextInput label={user ? 'New password (leave blank to keep)' : 'Password'} type="password" autoComplete="new-password" value={f.password} onChange={set('password')} error={fe.password} hint="At least 10 characters" required={!user} />
         {user && <SelectInput label="Status" value={f.status} onChange={set('status')} options={[{ value: 'ACTIVE', label: 'Active' }, { value: 'DISABLED', label: 'Disabled' }]} />}

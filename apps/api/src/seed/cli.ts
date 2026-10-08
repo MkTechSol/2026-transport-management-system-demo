@@ -3,7 +3,7 @@ import { sequelize, q1 } from '../db/sequelize';
 import { migrate } from '../db/migrate';
 import { logger } from '../logger';
 import { seedDemo } from './seedDemo';
-import { seedLoad } from './seedLoad';
+import { seedLoad, seedLoadFinance } from './seedLoad';
 
 /**
  * Safety guard for destructive seed commands.
@@ -34,7 +34,8 @@ async function main() {
     const get = (k: string, d: number) => Number(args.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d);
     await seedDemo({ log: false });
     const r = await seedLoad({ users: get('users', 1000), drivers: get('drivers', 1000), vehicles: get('vehicles', 300), trips: get('trips', 60000) });
-    console.log('Load data ready:', r);
+    const f = await seedLoadFinance({ vouchers: get('vouchers', 200000), invoices: 0 });
+    console.log('Load data ready:', r, f);
   } else {
     console.error('usage: cli.ts <seed|reset|load> [--yes]');
     process.exit(1);

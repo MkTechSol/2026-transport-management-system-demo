@@ -38,6 +38,11 @@ setupRouter.get('/integrity', requirePerm('settings:view'), wrap(async (_req, re
   add('Every voucher balances (debit = credit)', unbal.n === 0, unbal.n ? `${unbal.n} unbalanced voucher(s)` : 'All vouchers balance');
   const tb = await q1<any>(`SELECT COALESCE(sum(l.debit), 0)::float AS d, COALESCE(sum(l.credit), 0)::float AS c FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED'`);
   add('Trial balance agrees', Math.abs(tb.d - tb.c) < 0.005, `Debits ${tb.d.toLocaleString('en-US')} · credits ${tb.c.toLocaleString('en-US')}`);
+  const drift = await q1<any>(`SELECT count(*)::int AS n FROM (
+      SELECT a.id FROM accounts a LEFT JOIN account_balances ab ON ab.account_id = a.id
+      LEFT JOIN (SELECT l.account_id, sum(l.debit) AS d, sum(l.credit) AS c FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' GROUP BY 1) x ON x.account_id = a.id
+      WHERE COALESCE(ab.debit, 0) <> COALESCE(x.d, 0) OR COALESCE(ab.credit, 0) <> COALESCE(x.c, 0)) z`);
+  add('Running balances agree with the ledger lines', drift.n === 0, drift.n ? `${drift.n} account(s) differ — rebuild balances` : 'Account balances match the voucher lines');
   const ar = await q1<any>(`SELECT (SELECT COALESCE(sum(l.debit - l.credit), 0) FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable'))::float AS gl,
       (SELECT COALESCE(sum(total - paid), 0) FROM sales_invoices WHERE kind = 'INVOICE' AND status IN ('UNPAID','PARTIAL'))::float AS inv`);
   add('Receivables ledger = open invoices', Math.abs(ar.gl - ar.inv) < 1, `Ledger ${Math.round(ar.gl).toLocaleString('en-US')} · invoices ${Math.round(ar.inv).toLocaleString('en-US')}${ar.gl - ar.inv > 1 ? ' (difference is unapplied customer credit or an opening balance)' : ''}`);

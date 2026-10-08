@@ -55,3 +55,34 @@ export async function seedLoad(o: { users: number; drivers: number; vehicles: nu
   await sequelize.query('ANALYZE');
   return { users: users.length, drivers: drivers.length, vehicles: vehicles.length, trips: trips.length };
 }
+
+/** Finance & inventory scale fixture: balanced vouchers with bowzer / party dimensions and stock movements. */
+export async function seedLoadFinance(o: { vouchers: number; invoices: number }) {
+  const rng = makeRng(4242);
+  const accs = await q<any>(`SELECT id, system_key FROM accounts WHERE system_key IN ('cash','receivable','freight_delivery','exp_FUEL','exp_TOLL','exp_maintenance','payable','exp_parts')`);
+  const key = (k: string) => accs.find((a: any) => a.system_key === k).id as number;
+  const veh = (await q<any>('SELECT id FROM vehicles ORDER BY id')).map((v: any) => v.id as number);
+  const custs = (await q<any>('SELECT id FROM distributors ORDER BY id')).map((v: any) => v.id as number);
+  const fy = (await q1<any>(`SELECT id, starts_on::text AS s FROM fiscal_years WHERE status = 'OPEN' ORDER BY starts_on DESC LIMIT 1`))!;
+  const v0 = (await q1<any>('SELECT COALESCE(max(id), 0)::int AS m FROM vouchers'))!.m as number;
+  const l0 = (await q1<any>('SELECT COALESCE(max(id), 0)::bigint AS m FROM voucher_lines'))!.m as number;
+  const start = new Date(fy.s).getTime(); const span = Math.max(DAY, Date.now() - start);
+  const vouchers: any[] = []; const lines: any[] = []; let lid = l0;
+  for (let i = 0; i < o.vouchers; i++) {
+    const id = v0 + i + 1; const date = new Date(start + rng.int(0, Math.floor(span / DAY)) * DAY).toISOString().slice(0, 10);
+    const vh = rng.pick(veh); const amt = rng.int(1, 400) * 500; const kind = i % 5;
+    const [type, dr, cr, party]: [string, number, number, number | null] = kind === 0 ? ['SALE_INVOICE', key('receivable'), key('freight_delivery'), rng.pick(custs)] : kind === 1 ? ['CASH_RECEIPT', key('cash'), key('receivable'), rng.pick(custs)] : kind === 2 ? ['TRIP_EXPENSE', key('exp_FUEL'), key('cash'), null] : kind === 3 ? ['TRIP_EXPENSE', key('exp_TOLL'), key('cash'), null] : ['BOWZER_EXPENSE', key('exp_maintenance'), key('payable'), null];
+    vouchers.push({ id, voucher_no: `LD-${String(id).padStart(8, '0')}`, type, voucher_date: date, fiscal_year_id: fy.id, narration: 'Load test voucher', total: amt, vehicle_id: vh, party_type: party ? 'CUSTOMER' : null, party_id: party, trip_id: null, source_type: null, source_id: null, status: 'POSTED', void_reason: null, created_by: 1, created_at: new Date() });
+    lines.push({ id: ++lid, voucher_id: id, line_no: 1, account_id: dr, debit: amt, credit: 0, vehicle_id: vh, party_type: kind === 0 ? 'CUSTOMER' : null, party_id: kind === 0 ? party : null, trip_id: null, memo: null });
+    lines.push({ id: ++lid, voucher_id: id, line_no: 2, account_id: cr, debit: 0, credit: amt, vehicle_id: vh, party_type: kind === 1 ? 'CUSTOMER' : null, party_id: kind === 1 ? party : null, trip_id: null, memo: null });
+  }
+  await sequelize.query('ALTER TABLE voucher_lines DISABLE TRIGGER trg_voucher_balance'); // bulk load: skip the deferred balance trigger (rows are balanced by construction)
+  await bulk('vouchers', vouchers); await bulk('voucher_lines', lines);
+  await sequelize.query('ALTER TABLE voucher_lines ENABLE TRIGGER trg_voucher_balance');
+  await sequelize.query(`SELECT setval(pg_get_serial_sequence('vouchers','id'), (SELECT max(id) FROM vouchers)), setval(pg_get_serial_sequence('voucher_lines','id'), (SELECT max(id) FROM voucher_lines))`);
+  await sequelize.query(`TRUNCATE account_balances, party_balances;
+    INSERT INTO account_balances (account_id, debit, credit) SELECT l.account_id, sum(l.debit), sum(l.credit) FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' GROUP BY 1;
+    INSERT INTO party_balances (party_type, party_id, account_id, debit, credit) SELECT l.party_type, l.party_id, l.account_id, sum(l.debit), sum(l.credit) FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.party_id IS NOT NULL GROUP BY 1, 2, 3;`);
+  await sequelize.query('ANALYZE');
+  return { vouchers: vouchers.length, lines: lines.length };
+}

@@ -17,7 +17,7 @@ financeRouter.get('/accounts', requirePerm('finance:view'), wrap(async (req, res
   const rows = await q(
     `SELECT a.*, p.name AS parent_name ${withBalance ? `, COALESCE(b.bal, 0)::float AS balance` : ''}
        FROM accounts a LEFT JOIN accounts p ON p.id = a.parent_id
-       ${withBalance ? `LEFT JOIN (SELECT l.account_id, sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' GROUP BY 1) b ON b.account_id = a.id` : ''}
+       ${withBalance ? `LEFT JOIN (SELECT account_id, debit - credit AS bal FROM account_balances) b ON b.account_id = a.id` : ''}
       ORDER BY a.code`);
   res.json({ data: rows });
 }));
@@ -42,7 +42,7 @@ financeRouter.patch('/accounts/:id', requirePerm('finance:post'), wrap(async (re
 // ---------- Banks & fiscal years ----------
 financeRouter.get('/banks', requirePerm('finance:view'), wrap(async (_req, res) => {
   res.json({ data: await q(`SELECT b.*, a.code AS account_code, COALESCE(x.bal, 0)::float AS balance FROM banks b JOIN accounts a ON a.id = b.account_id
-    LEFT JOIN (SELECT l.account_id, sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' GROUP BY 1) x ON x.account_id = b.account_id ORDER BY b.name`) });
+    LEFT JOIN (SELECT account_id, debit - credit AS bal FROM account_balances) x ON x.account_id = b.account_id ORDER BY b.name`) });
 }));
 financeRouter.post('/banks', requirePerm('finance:post'), wrap(async (req, res) => {
   const b = parse(z.object({ name: z.string().trim().min(2).max(120), branch: z.string().trim().max(120).optional(), accountNo: z.string().trim().max(40).optional() }), req.body);

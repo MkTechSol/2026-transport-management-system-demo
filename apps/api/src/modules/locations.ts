@@ -128,7 +128,7 @@ distributorsRouter.get('/', requirePerm('distributors:view', 'trips:view'), wrap
   }
   const [rows, [{ total }]] = await Promise.all([
     q(`SELECT d.*, l.lat, l.lng, s.trips_total, s.mt_total, s.last_delivery${showBal ? `, COALESCE(b.bal, 0)::float AS balance` : ''}
-         FROM distributors d JOIN locations l ON l.id = d.location_id${showBal ? ` LEFT JOIN LATERAL (SELECT sum(x.debit - x.credit) AS bal FROM voucher_lines x JOIN vouchers v ON v.id = x.voucher_id AND v.status = 'POSTED' WHERE x.party_type = 'CUSTOMER' AND x.party_id = d.id AND x.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) b ON true` : ''}
+         FROM distributors d JOIN locations l ON l.id = d.location_id${showBal ? ` LEFT JOIN LATERAL (SELECT sum(x.debit - x.credit) AS bal FROM party_balances x WHERE x.party_type = 'CUSTOMER' AND x.party_id = d.id AND x.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) b ON true` : ''}
          LEFT JOIN LATERAL (SELECT count(*)::int AS trips_total, COALESCE(sum(t.delivered_mt),0)::float AS mt_total, max(t.delivered_at) AS last_delivery
                               FROM trips t WHERE t.distributor_id = d.id AND t.status = 'COMPLETED') s ON true
         WHERE ${w} ORDER BY ${orderBy(p.sort, p.dir, { name: 'd.name', code: 'd.code', region: 'd.region', city: 'd.city', trips: 's.trips_total', volume: 's.mt_total' }, 'd.name')} LIMIT :lim OFFSET :off`, r),

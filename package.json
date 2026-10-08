@@ -17,7 +17,8 @@
     "db:demo-reset": "npm run db:demo-reset -w @gasman/api",
     "db:seed-load": "npm run db:seed-load -w @gasman/api",
     "docs:permissions": "tsx scripts/gen-permissions.ts > docs/09-permissions.md",
-    "e2e": "node e2e/demo-flow.mjs"
+    "e2e": "node e2e/demo-flow.mjs",
+    "bench": "node scripts/bench.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

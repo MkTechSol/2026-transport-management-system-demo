@@ -20,7 +20,7 @@ vendorsRouter.get('/', requirePerm('vendors:view'), wrap(async (req, res) => {
   const from = `FROM vendors v WHERE ${where.join(' AND ')}`;
   const canFinance = can(req.user!.role, 'finance:view');
   const [rows, [{ total }]] = await Promise.all([
-    q(`SELECT v.*${canFinance ? `, COALESCE((SELECT sum(l.credit - l.debit) FROM voucher_lines l JOIN vouchers x ON x.id = l.voucher_id AND x.status = 'POSTED' WHERE l.party_type = 'VENDOR' AND l.party_id = v.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'payable')), 0)::float AS payable` : ''}
+    q(`SELECT v.*${canFinance ? `, COALESCE((SELECT sum(l.credit - l.debit) FROM party_balances l WHERE l.party_type = 'VENDOR' AND l.party_id = v.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'payable')), 0)::float AS payable` : ''}
         ${from} ORDER BY v.name LIMIT :lim OFFSET :off`, r),
     q(`SELECT count(*)::int AS total ${from}`, r),
   ]);

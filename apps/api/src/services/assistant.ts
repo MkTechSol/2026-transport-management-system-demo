@@ -48,7 +48,7 @@ export async function ask(role: Role, text: string): Promise<Answer> {
     const ex = await computeExceptions(role);
     const lines = [`Trips: ${s.active} active (${s.delayed} delayed), ${s.done_today} completed today, ${s.waiting} waiting for dispatch.`, `Exceptions needing attention: ${ex.filter((e) => e.severity === 'CRITICAL').length} critical, ${ex.filter((e) => e.severity === 'WARNING').length} warnings.`];
     if (can(role, 'approvals:view')) { const a = await q1<any>(`SELECT count(*)::int AS n, COALESCE(sum(amount), 0)::float AS amt FROM approvals WHERE status = 'PENDING'`); lines.push(`Approvals pending: ${a.n}${a.amt ? ` (${pkr(a.amt)})` : ''}.`); }
-    if (can(role, 'finance:view')) { const f = await q1<any>(`SELECT COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'receivable'), 0)::float AS ar, COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'cash' OR a.system_key = 'bank_control' OR a.parent_id = (SELECT id FROM accounts WHERE system_key = 'bank_control')), 0)::float AS cash FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' JOIN accounts a ON a.id = l.account_id`); lines.push(`Cash and bank: ${pkr(f.cash)}. Receivables: ${pkr(f.ar)}.`); }
+    if (can(role, 'finance:view')) { const f = await q1<any>(`SELECT COALESCE(sum(ab.debit - ab.credit) FILTER (WHERE a.system_key = 'receivable'), 0)::float AS ar, COALESCE(sum(ab.debit - ab.credit) FILTER (WHERE a.system_key = 'cash' OR a.parent_id = (SELECT id FROM accounts WHERE system_key = 'bank_control')), 0)::float AS cash FROM account_balances ab JOIN accounts a ON a.id = ab.account_id`); lines.push(`Cash and bank: ${pkr(f.cash)}. Receivables: ${pkr(f.ar)}.`); }
     return { intent: 'briefing', answer: `Daily briefing\n${lines.map((l) => `• ${l}`).join('\n')}`, link: { to: '/exceptions', label: 'Open Exceptions Center' }, suggestions: ['Which trips are delayed?', 'Show exceptions', 'Show low-stock items'] };
   }
 
@@ -60,7 +60,7 @@ export async function ask(role: Role, text: string): Promise<Answer> {
 
   if (has('owe', 'outstanding', 'receivable', 'overdue', 'unpaid', 'collect')) {
     if (!can(role, 'finance:view')) return denied('financial data');
-    const rows = await q(`SELECT d.name AS customer, x.bal::float AS balance FROM distributors d JOIN LATERAL (SELECT sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.party_type = 'CUSTOMER' AND l.party_id = d.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) x ON true WHERE x.bal > 0 ORDER BY x.bal DESC LIMIT 8`);
+    const rows = await q(`SELECT d.name AS customer, (pb.debit - pb.credit)::float AS balance FROM distributors d JOIN party_balances pb ON pb.party_type = 'CUSTOMER' AND pb.party_id = d.id AND pb.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable') WHERE pb.debit - pb.credit > 0 ORDER BY balance DESC LIMIT 8`);
     const tot = await q1<any>(`SELECT COALESCE(sum(total - paid), 0)::float AS due, COALESCE(sum(total - paid) FILTER (WHERE due_date < CURRENT_DATE), 0)::float AS overdue FROM sales_invoices WHERE kind = 'INVOICE' AND status IN ('UNPAID','PARTIAL')`);
     return { intent: 'receivables', answer: `Customers owe ${pkr(tot.due)} in total, of which ${pkr(tot.overdue)} is overdue. Largest balances:`, columns: [{ key: 'customer', label: 'Customer' }, { key: 'balance', label: 'Balance', type: 'money' }], rows, link: { to: '/finance/reports/receivable-aging', label: 'Open receivable aging' } };
   }
@@ -73,8 +73,8 @@ export async function ask(role: Role, text: string): Promise<Answer> {
 
   if (has('cash', 'bank balance', 'bank')) {
     if (!can(role, 'finance:view')) return denied('financial data');
-    const rows = await q(`SELECT b.name AS bank, COALESCE(sum(l.debit - l.credit), 0)::float AS balance FROM banks b LEFT JOIN voucher_lines l ON l.account_id = b.account_id LEFT JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' GROUP BY b.id ORDER BY balance DESC`);
-    const cash = await q1<any>(`SELECT COALESCE(sum(l.debit - l.credit), 0)::float AS b FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.account_id = (SELECT id FROM accounts WHERE system_key = 'cash')`);
+    const rows = await q(`SELECT b.name AS bank, COALESCE(ab.debit - ab.credit, 0)::float AS balance FROM banks b LEFT JOIN account_balances ab ON ab.account_id = b.account_id ORDER BY balance DESC`);
+    const cash = await q1<any>(`SELECT COALESCE(sum(debit - credit), 0)::float AS b FROM account_balances WHERE account_id = (SELECT id FROM accounts WHERE system_key = 'cash')`);
     return { intent: 'bank', answer: `Cash in hand is ${pkr(cash.b)}; banks hold ${pkr(rows.reduce((s: number, r: any) => s + r.balance, 0))}.`, columns: [{ key: 'bank', label: 'Bank' }, { key: 'balance', label: 'Balance', type: 'money' }], rows, link: { to: '/finance/reports/bank-balances', label: 'Open bank balances' } };
   }
 

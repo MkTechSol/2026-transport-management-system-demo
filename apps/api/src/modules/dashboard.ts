@@ -32,7 +32,7 @@ async function build(plantId?: number) {
                     COALESCE(sum(delivered_mt) FILTER (WHERE status IN ('DELIVERED','RETURNING','COMPLETED') AND delivered_at >= date_trunc('month', now()) - interval '1 month' AND delivered_at < date_trunc('month', now())), 0)::float AS lpg_mt_prev_month,
                     COALESCE(round(100.0 * count(*) FILTER (WHERE status = 'COMPLETED' AND completed_at >= now() - interval '30 days' AND delay_minutes <= 15)
                            / NULLIF(count(*) FILTER (WHERE status = 'COMPLETED' AND completed_at >= now() - interval '30 days'), 0)), 0)::int AS on_time_pct
-               FROM trips t WHERE 1=1 ${tp}`, r),
+               FROM trips t WHERE (t.status NOT IN ('COMPLETED','CANCELLED') OR t.completed_at >= now() - interval '70 days') ${tp}`, r),
     q1<any>(`SELECT count(*) FILTER (WHERE status IN ('AVAILABLE','ON_TRIP'))::int AS active, count(*) FILTER (WHERE status = 'AVAILABLE')::int AS available,
                     count(*) FILTER (WHERE status = 'ON_TRIP')::int AS on_trip, count(*)::int AS total FROM drivers WHERE archived_at IS NULL`),
     q1<any>(`SELECT count(*) FILTER (WHERE status = 'SCHEDULED' AND scheduled_on <= CURRENT_DATE + 7)::int AS due,
@@ -68,7 +68,7 @@ async function build(plantId?: number) {
     q(`SELECT d.id, d.doc_type, d.expires_on, (d.expires_on - CURRENT_DATE)::int AS days_left, v.id AS vehicle_id, v.code AS vehicle_code, dr.id AS driver_id, dr.full_name AS driver_name
          FROM documents d LEFT JOIN vehicles v ON v.id = d.vehicle_id LEFT JOIN drivers dr ON dr.id = d.driver_id
         WHERE d.expires_on <= CURRENT_DATE + 30 AND COALESCE(v.archived_at, dr.archived_at) IS NULL
-          AND NOT EXISTS (SELECT 1 FROM documents n WHERE n.doc_type = d.doc_type AND n.expires_on > d.expires_on AND n.vehicle_id IS NOT DISTINCT FROM d.vehicle_id AND n.driver_id IS NOT DISTINCT FROM d.driver_id)
+          AND ${currentDocSql('d')}
         ORDER BY d.expires_on LIMIT 6`),
     q(`SELECT m.id, m.title, m.scheduled_on, m.status, v.id AS vehicle_id, v.code AS vehicle_code, (m.scheduled_on - CURRENT_DATE)::int AS days_left
          FROM maintenance_records m JOIN vehicles v ON v.id = m.vehicle_id WHERE m.status = 'SCHEDULED' AND m.scheduled_on <= CURRENT_DATE + 7 ORDER BY m.scheduled_on LIMIT 5`),
@@ -119,14 +119,13 @@ async function financeBlock(plantId?: number) {
       LEFT JOIN (SELECT ${localDate('t.delivered_at')} AS dd, sum(t.delivered_mt * t.freight_per_mt) AS v FROM trips t WHERE t.delivered_at >= now() - interval '15 days' ${tp} GROUP BY 1) i ON i.dd = d::date
       LEFT JOIN (SELECT e.incurred_on AS dd, sum(e.amount) AS v FROM trip_expenses e JOIN trips t ON t.id = e.trip_id WHERE e.status IN ('APPROVED','REIMBURSED') AND e.incurred_on >= CURRENT_DATE - 14 ${tp} GROUP BY 1) x ON x.dd = d::date
       ORDER BY d`, r);
-  const banks = await q(`SELECT b.name, COALESCE(sum(l.debit - l.credit), 0)::float AS balance FROM banks b LEFT JOIN voucher_lines l ON l.account_id = b.account_id LEFT JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE b.active GROUP BY b.id ORDER BY balance DESC`);
-  const [bal] = await q(`SELECT COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'cash'), 0)::float AS cash,
-      COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'receivable'), 0)::float AS receivable, COALESCE(sum(l.credit - l.debit) FILTER (WHERE a.system_key = 'payable'), 0)::float AS payable
-    FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' JOIN accounts a ON a.id = l.account_id WHERE a.system_key IN ('cash','receivable','payable')`);
+  const banks = await q(`SELECT b.name, COALESCE(ab.debit - ab.credit, 0)::float AS balance FROM banks b LEFT JOIN account_balances ab ON ab.account_id = b.account_id WHERE b.active ORDER BY balance DESC`);
+  const [bal] = await q(`SELECT COALESCE(sum(ab.debit - ab.credit) FILTER (WHERE a.system_key = 'cash'), 0)::float AS cash, COALESCE(sum(ab.debit - ab.credit) FILTER (WHERE a.system_key = 'receivable'), 0)::float AS receivable,
+      COALESCE(sum(ab.credit - ab.debit) FILTER (WHERE a.system_key = 'payable'), 0)::float AS payable FROM account_balances ab JOIN accounts a ON a.id = ab.account_id WHERE a.system_key IN ('cash','receivable','payable')`);
   const [od] = await q(`SELECT COALESCE(sum(total - paid), 0)::float AS overdue, count(*)::int AS n FROM sales_invoices WHERE kind = 'INVOICE' AND status IN ('UNPAID','PARTIAL') AND due_date < CURRENT_DATE`);
-  const creditWatch = await q(`SELECT d.id, d.name, d.credit_limit_pkr::float AS credit_limit, d.credit_alert_pct, x.bal::float AS balance, round(x.bal / d.credit_limit_pkr * 100)::int AS pct
-      FROM distributors d JOIN LATERAL (SELECT sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.party_type = 'CUSTOMER' AND l.party_id = d.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) x ON true
-     WHERE d.credit_limit_pkr > 0 AND x.bal >= d.credit_limit_pkr * d.credit_alert_pct / 100.0 ORDER BY pct DESC LIMIT 5`);
+  const creditWatch = await q(`SELECT d.id, d.name, d.credit_limit_pkr::float AS credit_limit, d.credit_alert_pct, (pb.debit - pb.credit)::float AS balance, round((pb.debit - pb.credit) / d.credit_limit_pkr * 100)::int AS pct
+      FROM distributors d JOIN party_balances pb ON pb.party_type = 'CUSTOMER' AND pb.party_id = d.id AND pb.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')
+     WHERE d.credit_limit_pkr > 0 AND (pb.debit - pb.credit) >= d.credit_limit_pkr * d.credit_alert_pct / 100.0 ORDER BY pct DESC LIMIT 5`);
   const treasury = { cash: bal.cash, banks, bankTotal: Math.round(banks.reduce((s: number, b: any) => s + b.balance, 0)), receivable: bal.receivable, overdue: od.overdue, overdueInvoices: od.n, payable: bal.payable };
   const profit = m.income_mtd - e.expenses_mtd;
   const rd = Math.round;

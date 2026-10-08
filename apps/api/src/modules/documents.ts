@@ -4,7 +4,7 @@ import { DOC_TYPES } from '@gasman/shared';
 import { q, q1, exec } from '../db/sequelize';
 import { badRequest, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
-import { docStatusSql } from '../lib/sql';
+import { docStatusSql, currentDocSql } from '../lib/sql';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
 
@@ -22,7 +22,7 @@ documentsRouter.get('/', requirePerm('documents:view'), wrap(async (req, res) =>
   if (req.user!.role === 'DRIVER') { where.push('d.driver_id = :me'); r.me = req.user!.driverId ?? -1; }
   if (p.q) { where.push('(v.code ILIKE :q OR dr.full_name ILIKE :q OR d.doc_number ILIKE :q)'); r.q = likeTerm(p.q); }
   // Only the latest document of each type per owner counts as "current".
-  where.push(`NOT EXISTS (SELECT 1 FROM documents n WHERE n.doc_type = d.doc_type AND n.expires_on > d.expires_on AND n.vehicle_id IS NOT DISTINCT FROM d.vehicle_id AND n.driver_id IS NOT DISTINCT FROM d.driver_id)`);
+  where.push(`${currentDocSql('d')}`);
   const w = where.join(' AND ');
   const from = `FROM documents d LEFT JOIN vehicles v ON v.id = d.vehicle_id LEFT JOIN drivers dr ON dr.id = d.driver_id WHERE ${w}`;
   const [rows, [{ total }], [summary]] = await Promise.all([
@@ -32,7 +32,7 @@ documentsRouter.get('/', requirePerm('documents:view'), wrap(async (req, res) =>
     q(`SELECT count(*)::int AS total ${from}`, r),
     q(`SELECT count(*) FILTER (WHERE d.expires_on < CURRENT_DATE)::int AS expired, count(*) FILTER (WHERE d.expires_on >= CURRENT_DATE AND d.expires_on <= CURRENT_DATE + 30)::int AS expiring,
               count(*) FILTER (WHERE d.expires_on > CURRENT_DATE + 30)::int AS active FROM documents d LEFT JOIN vehicles v ON v.id = d.vehicle_id LEFT JOIN drivers dr ON dr.id = d.driver_id
-        WHERE COALESCE(v.archived_at, dr.archived_at) IS NULL AND NOT EXISTS (SELECT 1 FROM documents n WHERE n.doc_type = d.doc_type AND n.expires_on > d.expires_on AND n.vehicle_id IS NOT DISTINCT FROM d.vehicle_id AND n.driver_id IS NOT DISTINCT FROM d.driver_id)`),
+        WHERE COALESCE(v.archived_at, dr.archived_at) IS NULL AND ${currentDocSql('d')}`),
   ]);
   res.json({ ...listResponse(rows, total, p.page, p.pageSize), summary });
 }));

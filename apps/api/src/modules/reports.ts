@@ -4,7 +4,7 @@ import { can, Permission } from '@gasman/shared';
 import { q } from '../db/sequelize';
 import { forbidden, badRequest } from '../lib/errors';
 import { listResponse, paging, parse, wrap } from '../lib/http';
-import { docStatusSql } from '../lib/sql';
+import { docStatusSql, currentDocSql } from '../lib/sql';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
 
@@ -85,7 +85,7 @@ const DEFS: Record<string, Def> = {
       return { r, order: 'days_left ASC', sql: `SELECT CASE WHEN d.vehicle_id IS NOT NULL THEN 'Vehicle' ELSE 'Driver' END AS owner_type, COALESCE(v.code, dr.full_name) AS owner, d.doc_type, d.doc_number, d.expires_on, (d.expires_on - CURRENT_DATE)::int AS days_left, ${docStatusSql('d')} AS status
         FROM documents d LEFT JOIN vehicles v ON v.id = d.vehicle_id LEFT JOIN drivers dr ON dr.id = d.driver_id
         WHERE d.expires_on <= CURRENT_DATE + 60 AND COALESCE(v.archived_at, dr.archived_at) IS NULL
-          AND NOT EXISTS (SELECT 1 FROM documents n WHERE n.doc_type = d.doc_type AND n.expires_on > d.expires_on AND n.vehicle_id IS NOT DISTINCT FROM d.vehicle_id AND n.driver_id IS NOT DISTINCT FROM d.driver_id)
+          AND ${currentDocSql('d')}
           ${f.vehicleId ? 'AND d.vehicle_id = :veh' : ''} ${f.driverId ? 'AND d.driver_id = :drv' : ''}` }; },
   },
   'dispatch-summary': {

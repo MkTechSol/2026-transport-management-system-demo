@@ -31,7 +31,7 @@ export interface SeedSummary { users: number; vehicles: number; drivers: number;
 export async function truncateAll() {
   await sequelize.query(`TRUNCATE notification_reads, notifications, audit_logs, trip_positions, trip_events, safety_checks, incidents, maintenance_records, documents,
     trip_expenses, fuel_entries, approvals, approval_rules, settings,
-    voucher_allocations, voucher_lines, vouchers, voucher_counters, sales_invoice_lines, sales_invoices, sales_order_lines, sales_orders, banks, vendors,
+    voucher_allocations, voucher_lines, vouchers, voucher_counters, account_balances, party_balances, sales_invoice_lines, sales_invoices, sales_order_lines, sales_orders, banks, vendors,
     stock_movements, stock_balances, stock_doc_lines, stock_docs, tyre_events, tyres, purchase_order_lines, purchase_orders, rfq_quote_lines, rfq_quotes, purchase_request_lines, purchase_requests, items, item_subcategories, item_categories, brands, warehouses, payroll_lines, payroll_runs, leave_requests, attendance, employees, departments, exception_acks,
     trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
   await sequelize.query(`DELETE FROM accounts WHERE system_key IS NULL AND code LIKE '1120-%'; ALTER SEQUENCE invoice_no_seq RESTART; ALTER SEQUENCE sales_order_no_seq RESTART; ALTER SEQUENCE stock_doc_seq RESTART; ALTER SEQUENCE pr_no_seq RESTART; ALTER SEQUENCE po_no_seq RESTART;`);

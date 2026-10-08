@@ -38,16 +38,17 @@ driversRouter.get('/', requirePerm('drivers:view'), wrap(async (req, res) => {
   if (req.user!.role === 'DRIVER') { where.push('d.id = :me'); r.me = req.user!.driverId ?? -1; }
   const w = where.join(' AND ');
   const [rows, [{ total }]] = await Promise.all([
+    // Page the base table first, then run the per-driver lookups for just those rows (keeps list latency flat as the driver count grows).
     q(`SELECT d.id, d.employee_id, d.full_name, d.phone, d.license_no, d.license_class, d.status, d.experience_years, d.safety_score, d.home_plant_id, l.name AS home_plant_name,
               av.code AS assigned_vehicle_code, ct.code AS current_trip_code, docs.expired AS docs_expired, docs.expiring AS docs_expiring, lic.expires_on AS license_expiry
-         FROM drivers d LEFT JOIN locations l ON l.id = d.home_plant_id
+         FROM (SELECT * FROM drivers d WHERE ${w} ORDER BY ${orderBy(p.sort, p.dir, SORTS, 'd.full_name ASC')} LIMIT :lim OFFSET :off) d LEFT JOIN locations l ON l.id = d.home_plant_id
          LEFT JOIN LATERAL (SELECT code FROM vehicles v WHERE v.default_driver_id = d.id AND v.archived_at IS NULL LIMIT 1) av ON true
          LEFT JOIN LATERAL (SELECT t.code FROM trips t WHERE t.driver_id = d.id AND t.status IN ${EXEC_STATUS_SQL} LIMIT 1) ct ON true
          LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE expires_on < CURRENT_DATE)::int AS expired,
                                    count(*) FILTER (WHERE expires_on >= CURRENT_DATE AND expires_on <= CURRENT_DATE + 30)::int AS expiring
                               FROM documents x WHERE x.driver_id = d.id AND ${currentDocSql('x')}) docs ON true
          LEFT JOIN LATERAL (SELECT max(expires_on) AS expires_on FROM documents x WHERE x.driver_id = d.id AND x.doc_type = 'LICENSE') lic ON true
-        WHERE ${w} ORDER BY ${orderBy(p.sort, p.dir, SORTS, 'd.full_name ASC')} LIMIT :lim OFFSET :off`, r),
+        ORDER BY ${orderBy(p.sort, p.dir, SORTS, 'd.full_name ASC')}`, r),
     q(`SELECT count(*)::int AS total FROM drivers d WHERE ${w}`, r),
   ]);
   res.json(listResponse(rows, total, p.page, p.pageSize));

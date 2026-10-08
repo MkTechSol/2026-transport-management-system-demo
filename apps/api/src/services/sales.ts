@@ -3,7 +3,7 @@ import { badRequest, notFound, unprocessable } from '../lib/errors';
 import type { AuthUser } from '../middleware/auth';
 import { EXPENSE_CATEGORY_LABELS } from '@gasman/shared';
 import { audit } from './audit';
-import { accountId, fiscalYearFor, postVoucher, voidVoucher } from './ledger';
+import { accountId, applyBalances, fiscalYearFor, postVoucher, voidVoucher } from './ledger';
 import { postHooks } from './hooks';
 import { setting } from './settings';
 import { notify } from './notify';
@@ -21,8 +21,7 @@ export interface InvoiceInput {
 /** Customer receivable balance from the ledger (debit-positive). */
 export async function customerBalance(customerId: number, tx?: any): Promise<number> {
   const r = await q1<{ b: number }>(
-    `SELECT COALESCE(sum(l.debit - l.credit), 0)::float AS b FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED'
-      WHERE l.party_type = 'CUSTOMER' AND l.party_id = :c AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')`, { c: customerId }, tx);
+    `SELECT COALESCE(sum(debit - credit), 0)::float AS b FROM party_balances WHERE party_type = 'CUSTOMER' AND party_id = :c AND account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')`, { c: customerId }, tx);
   return r!.b;
 }
 
@@ -104,7 +103,7 @@ export async function voidInvoice(user: AuthUser, req: any, id: number, reason: 
     if (!inv) throw notFound('Invoice');
     if (inv.status === 'VOID') throw unprocessable('Invoice is already void.');
     if (Number(inv.paid) > 0 && inv.kind === 'INVOICE') throw unprocessable('This invoice has receipts allocated. Void or reverse those receipts first.');
-    if (inv.voucher_id) { await exec(`UPDATE vouchers SET status = 'VOID', void_reason = :r WHERE id = :v`, { r: reason, v: inv.voucher_id }, tx); }
+    if (inv.voucher_id) { await exec(`UPDATE vouchers SET status = 'VOID', void_reason = :r WHERE id = :v`, { r: reason, v: inv.voucher_id }, tx); await applyBalances(inv.voucher_id, -1, tx); }
     await exec(`DELETE FROM voucher_allocations WHERE voucher_id = :v`, { v: inv.voucher_id }, tx);
     await exec(`UPDATE sales_invoices SET status = 'VOID' WHERE id = :id`, { id }, tx);
     await exec(`UPDATE trips SET invoice_id = NULL WHERE invoice_id = :id`, { id }, tx);

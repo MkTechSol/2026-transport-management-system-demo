@@ -41,6 +41,14 @@ async function nextNo(type: string, fyId: number, fyLabel: string, tx: any) {
   return `${prefix}-${fyLabel.slice(2, 4)}${fyLabel.slice(-2)}-${String(r!.last_no).padStart(5, '0')}`;
 }
 
+/** Keeps the running balance tables in step with posted/voided vouchers (sign +1 to apply, -1 to reverse). */
+export async function applyBalances(voucherId: number, sign: 1 | -1, tx: any) {
+  await exec(`INSERT INTO account_balances (account_id, debit, credit) SELECT account_id, sum(debit) * :s, sum(credit) * :s FROM voucher_lines WHERE voucher_id = :v GROUP BY account_id
+              ON CONFLICT (account_id) DO UPDATE SET debit = account_balances.debit + EXCLUDED.debit, credit = account_balances.credit + EXCLUDED.credit`, { v: voucherId, s: sign }, tx);
+  await exec(`INSERT INTO party_balances (party_type, party_id, account_id, debit, credit) SELECT party_type, party_id, account_id, sum(debit) * :s, sum(credit) * :s FROM voucher_lines WHERE voucher_id = :v AND party_id IS NOT NULL GROUP BY party_type, party_id, account_id
+              ON CONFLICT (party_type, party_id, account_id) DO UPDATE SET debit = party_balances.debit + EXCLUDED.debit, credit = party_balances.credit + EXCLUDED.credit`, { v: voucherId, s: sign }, tx);
+}
+
 /** Posts a balanced voucher. Must run inside (or creates) a transaction so all lines commit together. */
 export async function postVoucher(input: VoucherInput, tx?: any): Promise<any> {
   if (!tx) return sequelize.transaction((t) => postVoucher(input, t));
@@ -75,6 +83,7 @@ export async function postVoucher(input: VoucherInput, tx?: any): Promise<any> {
        VALUES (:v, :n, :a, :d, :c, :veh, :pt, :pid, :trip, :m)`,
       { v: v.id, n: n++, a: l.accountId, d: l.debit, c: l.credit, veh: l.vehicleId ?? input.vehicleId ?? null, pt: l.partyType ?? null, pid: l.partyId ?? null, trip: l.tripId ?? input.tripId ?? null, m: l.memo ?? null }, tx);
   }
+  await applyBalances(v.id, 1, tx);
   return v;
 }
 
@@ -92,6 +101,7 @@ export async function voidVoucher(user: AuthUser, id: number, reason: string, tx
     await exec('DELETE FROM voucher_allocations WHERE voucher_id = :id', { id }, tx);
   }
   await exec(`UPDATE vouchers SET status = 'VOID', void_reason = :r WHERE id = :id`, { r: reason, id }, tx);
+  await applyBalances(id, -1, tx);
   if (v.source_type === 'TRIP_EXPENSE') await exec(`UPDATE trip_expenses SET voucher_id = NULL WHERE id = :s`, { s: v.source_id }, tx);
   return v;
 }

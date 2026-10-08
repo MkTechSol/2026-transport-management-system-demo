@@ -37,7 +37,7 @@ tripsRouter.get('/', requirePerm('trips:view'), wrap(async (req, res) => {
     from: z.string().optional(), to: z.string().optional(), scope: z.enum(['active', 'upcoming', 'history']).optional(),
   }), req.query);
   const where = ['1=1']; const r: Record<string, unknown> = { lim: p.pageSize, off: p.offset };
-  if (p.q) { where.push('(t.code ILIKE :q OR v.code ILIKE :q OR v.registration_no ILIKE :q OR d.full_name ILIKE :q OR dl.name ILIKE :q OR o.name ILIKE :q OR di.name ILIKE :q)'); r.q = likeTerm(p.q); }
+  if (p.q) { where.push('(t.code ILIKE :q OR t.vehicle_id IN (SELECT id FROM vehicles WHERE code ILIKE :q OR registration_no ILIKE :q) OR t.driver_id IN (SELECT id FROM drivers WHERE full_name ILIKE :q) OR t.destination_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR t.origin_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR t.distributor_id IN (SELECT id FROM distributors WHERE name ILIKE :q))'); r.q = likeTerm(p.q); }
   if (f.status) { where.push('t.status IN (:st)'); r.st = f.status.split(',').filter((s) => (TRIP_STATUSES as readonly string[]).includes(s)); }
   if (f.scope === 'active') where.push(`t.status IN ('DISPATCHED','IN_TRANSIT','DELAYED','ON_HOLD','ARRIVED','DELIVERED','RETURNING')`);
   if (f.scope === 'upcoming') where.push(`t.status IN ('DRAFT','PLANNED','ASSIGNED')`);

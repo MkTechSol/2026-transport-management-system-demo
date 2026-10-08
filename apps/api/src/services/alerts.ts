@@ -1,4 +1,5 @@
 import { DOC_TYPE_LABELS } from '@gasman/shared';
+import { currentDocSql } from '../lib/sql';
 import { q } from '../db/sequelize';
 import { logger } from '../logger';
 import { AUDIENCE, notify } from './notify';
@@ -10,7 +11,7 @@ export async function generateComplianceAlerts(): Promise<number> {
     `SELECT d.id, d.doc_type, d.expires_on, (d.expires_on - CURRENT_DATE)::int AS days_left, v.id AS vehicle_id, v.code AS vehicle_code, dr.id AS driver_id, dr.full_name AS driver_name
        FROM documents d LEFT JOIN vehicles v ON v.id = d.vehicle_id LEFT JOIN drivers dr ON dr.id = d.driver_id
       WHERE d.expires_on <= CURRENT_DATE + 30 AND COALESCE(v.archived_at, dr.archived_at) IS NULL
-        AND NOT EXISTS (SELECT 1 FROM documents x WHERE x.doc_type = d.doc_type AND x.expires_on > d.expires_on AND x.vehicle_id IS NOT DISTINCT FROM d.vehicle_id AND x.driver_id IS NOT DISTINCT FROM d.driver_id)`,
+        AND ${currentDocSql('d')}`,
   );
   for (const d of docs) {
     const owner = d.vehicle_code ? `Vehicle ${d.vehicle_code}` : `Driver ${d.driver_name}`;

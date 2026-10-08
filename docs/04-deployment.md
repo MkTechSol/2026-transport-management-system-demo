@@ -1,6 +1,6 @@
 # 04 — Deployment
 
-Target: VPS `taktak-vps` (alias from the brief). **Status: not deployed yet** — the sandbox that built this cannot reach the server. `deploy/vps-audit.sh` is a read-only script; run it on the VPS, send back the output, and we will fill `01-vps-audit.md` and choose ports.
+Target: VPS `taktak-vps` (alias from the brief). **Status: audited (see `01-vps-audit.md`), not yet deployed** — the build sandbox cannot reach the server, so the steps below are run by MK TechSol on the VPS. Subdomain: `gasman-tms.mk-teknology.com` (not the existing `gasmanlpg` site).
 
 ## Topology
 ```

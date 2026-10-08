@@ -53,7 +53,7 @@ export default function Dispatch() {
                   return (
                     <article key={t.id} className="card p-3">
                       <div className="mb-1.5 flex items-start justify-between gap-2"><Link to={`/trips/${t.id}`} className="text-sm font-semibold text-brand-700 hover:underline">{t.code}</Link><StatusPill status={t.status} /></div>
-                      <p className="text-sm font-medium">{t.destination_name}</p>
+                      <p className="text-sm font-medium">{t.stop_count > 1 ? t.stops_label : t.destination_name}{t.stop_count > 1 && <span className="ml-1 text-[11px] font-semibold text-brand-700">({t.stops_done ?? 0}/{t.stop_count})</span>}</p>
                       <p className="text-xs text-slate-500">{t.origin_name} · {fmtMt(t.planned_load_mt)}{t.priority !== 'NORMAL' && <Pill tone="red" dot={false} className="ml-1.5">{t.priority}</Pill>}</p>
                       {t.vehicle_code ? <p className="mt-1.5 text-xs text-slate-600">{t.vehicle_code} · {t.driver_name}</p> : <p className="mt-1.5 text-xs italic text-amber-700">No vehicle / driver</p>}
                       {['IN_TRANSIT', 'DELAYED', 'ON_HOLD', 'RETURNING'].includes(t.status)

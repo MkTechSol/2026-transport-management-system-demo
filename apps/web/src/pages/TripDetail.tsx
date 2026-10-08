@@ -19,6 +19,8 @@ import { KV, KVGrid, Section, Stepper, Tabs, Breadcrumbs } from '../ui/Page';
 import { Pill, StatusPill } from '../ui/Pill';
 import { MapView } from '../map/MapView';
 import { TripActionBar, TRIP_INVALIDATE } from '../features/trip';
+import { StopsPanel } from '../features/TripStops';
+import { StopRow, StopsEditor, stopsPayload, validateStops } from '../features/StopsEditor';
 
 const TABS = [{ key: 'overview', label: 'Overview' }, { key: 'tracking', label: 'Tracking' }, { key: 'resources', label: 'Vehicle & driver' }, { key: 'fuel', label: 'Fuel' }, { key: 'expenses', label: 'Expenses' }, { key: 'delivery', label: 'Load & delivery' }, { key: 'safety', label: 'Safety checks' }, { key: 'finance', label: 'Finance' }, { key: 'activity', label: 'Activity' }];
 
@@ -29,7 +31,8 @@ export default function TripDetail() {
   const { data, isLoading, error, refetch } = useDetail<any>(`/trips/${id}`, { refetchInterval: 8000 });
   if (isLoading) return <PageLoader />;
   if (error || !data) return <><Link to="/trips" className="mb-3 inline-flex items-center gap-1 text-sm text-brand-700"><ArrowLeft className="h-4 w-4" />Back to trips</Link><ErrorState error={error} onRetry={() => refetch()} /></>;
-  const { trip: t, events, checks, actions, expenses, fuel, economics } = data;
+  const { trip: t, stops, events, checks, actions, expenses, fuel, economics } = data;
+  const multi = t.stop_count > 1;
   const tripName = `${t.vehicle_code ?? 'Unassigned'} / ${t.origin_name} – ${t.destination_name} / ${new Date(t.scheduled_departure).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Karachi' }).replace(/\//g, '-')}`;
   const status = t.status as TripStatus;
   const base: TripStatus = status === 'DELAYED' ? 'IN_TRANSIT' : status === 'ON_HOLD' ? (t.status_before_hold ?? 'PLANNED') : status;
@@ -44,13 +47,13 @@ export default function TripDetail() {
         <div>
           <div className="flex flex-wrap items-center gap-3"><h1 className="text-2xl font-semibold">{t.code}</h1><StatusPill status={status} />{t.priority !== 'NORMAL' && <Pill tone={t.priority === 'LOW' ? 'slate' : 'red'} dot={false}>{t.priority} priority</Pill>}{t.lpg_source === 'IMPORTED' && <Pill tone="purple" dot={false}>Imported LPG</Pill>}{t.trip_type === 'UPLIFTING' && <Pill tone="teal" dot={false}>Uplifting</Pill>}</div>
           <p className="mt-0.5 text-xs text-slate-500">{tripName}</p>
-          <p className="mt-1 text-sm text-slate-600">{t.distributor_name ?? t.destination_name} · <b>{t.origin_name}</b> → <b>{t.destination_name}</b> ({regionLabel(t.destination_region)})</p>
+          <p className="mt-1 text-sm text-slate-600">{t.distributor_name ?? t.destination_name} · <b>{t.origin_name}</b> → {multi ? stops.map((x: any) => x.location_name).join(' › ') : <><b>{t.destination_name}</b> ({regionLabel(t.destination_region)})</>}{multi && <Pill tone="blue" dot={false} className="ml-2">{t.stop_count} stops</Pill>}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {t.public_token && !['DRAFT', 'CANCELLED'].includes(status) && <Button icon={<Copy className="h-4 w-4" />} onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/track/${t.public_token}`); toast('success', 'Customer tracking link copied.'); }}>Tracking link</Button>}
           {t.departed_at && <Button onClick={() => nav(`/trips/${t.id}/voucher`)}>Trip voucher</Button>}
           {editable && <Button icon={<Pencil className="h-4 w-4" />} onClick={() => setEdit(true)}>Edit</Button>}
-          <TripActionBar trip={t} actions={actions} hasPassedPretrip={passed} onChanged={() => refetch()} autoAssign={sp.get('assign') === '1'} />
+          <TripActionBar trip={{ ...t, stops }} actions={actions} hasPassedPretrip={passed} onChanged={() => refetch()} autoAssign={sp.get('assign') === '1'} />
         </div>
       </div>
 
@@ -71,16 +74,16 @@ export default function TripDetail() {
       )}
 
       <Tabs tabs={TABS.filter((x) => x.key !== 'finance' || can('finance:view')).map((x) => (x.key === 'safety' ? { ...x, count: checks.length } : x.key === 'expenses' ? { ...x, count: expenses.length } : x.key === 'fuel' ? { ...x, count: fuel.length } : x))} value={tab} onChange={(k) => setSp((p) => { const n = new URLSearchParams(p); n.set('tab', k); n.delete('assign'); return n; }, { replace: true })} />
-      {tab === 'overview' && <Overview t={t} />}
-      {tab === 'tracking' && <TrackingTab t={t} moving={moving} />}
+      {tab === 'overview' && <Overview t={t} stops={stops} onChanged={() => refetch()} />}
+      {tab === 'tracking' && <TrackingTab t={t} stops={stops} moving={moving} />}
       {tab === 'resources' && <Resources t={t} nav={nav} />}
       {tab === 'fuel' && <FuelTab t={t} fuel={fuel} onChanged={() => refetch()} />}
       {tab === 'expenses' && <ExpensesTab t={t} expenses={expenses} onChanged={() => refetch()} />}
       {tab === 'finance' && can('finance:view') && <FinanceTab t={t} e={economics} />}
-      {tab === 'delivery' && <Delivery t={t} />}
+      {tab === 'delivery' && <Delivery t={t} stops={stops} onChanged={() => refetch()} />}
       {tab === 'safety' && <SafetyTab checks={checks} />}
       {tab === 'activity' && <Activity events={events} />}
-      {edit && <EditTrip t={t} onClose={() => setEdit(false)} />}
+      {edit && <EditTrip t={t} stops={stops} onClose={() => setEdit(false)} />}
     </>
   );
 }
@@ -140,14 +143,15 @@ function FinanceTab({ t, e }: { t: any; e: any }) {
 }
 const Row = ({ label, children }: any) => <div className="flex items-center justify-between"><dt className="text-slate-600">{label}</dt><dd>{children}</dd></div>;
 
-function Overview({ t }: { t: any }) {
+function Overview({ t, stops, onChanged }: { t: any; stops: any[]; onChanged: () => void }) {
   const times: [string, any][] = [['Scheduled departure', t.scheduled_departure], ['Dispatched', t.dispatched_at], ['Departed', t.departed_at], ['Planned arrival', t.planned_arrival], ['Arrived', t.arrived_at], ['Delivered', t.delivered_at], ['Return started', t.return_started_at], ['Completed', t.completed_at]];
   return (
     <div className="grid gap-5 lg:grid-cols-2">
+      {t.stop_count > 1 && <Section title={`Delivery stops (${t.stop_count})`} subtitle="Served in this order" className="lg:col-span-2"><StopsPanel trip={t} stops={stops} onChanged={onChanged} /></Section>}
       <Section title="Trip details">
         <KVGrid cols={2}>
           <KV label="Origin">{t.origin_name}<span className="block text-xs text-slate-500">{t.origin_city}</span></KV>
-          <KV label="Destination">{t.destination_name}<span className="block text-xs text-slate-500">{t.destination_city} · {regionLabel(t.destination_region)}</span></KV>
+          <KV label={t.stop_count > 1 ? 'Final destination' : 'Destination'}>{t.destination_name}<span className="block text-xs text-slate-500">{t.destination_city} · {regionLabel(t.destination_region)}</span></KV>
           <KV label="Distributor">{t.distributor_id ? <Link className="text-brand-700 hover:underline" to={`/distributors/${t.distributor_id}`}>{t.distributor_name}</Link> : '—'}</KV>
           <KV label="Route">{t.distance_km ? `${t.distance_km} km · ~${fmtDuration(t.est_duration_min)}` : '—'}</KV>
           <KV label="LPG source">{t.lpg_source === 'LOCAL' ? 'Local' : 'Imported'}</KV><KV label="Planned load">{fmtMt(t.planned_load_mt)}</KV>
@@ -164,11 +168,11 @@ function Overview({ t }: { t: any }) {
   );
 }
 
-function TrackingTab({ t, moving }: { t: any; moving: boolean }) {
+function TrackingTab({ t, stops, moving }: { t: any; stops: any[]; moving: boolean }) {
   const { data } = useQuery({ queryKey: ['/tracking', 'trip', t.id], queryFn: () => get(`/tracking/trips/${t.id}`), refetchInterval: moving ? 5000 : false });
   const origin: [number, number] = [t.origin_lat, t.origin_lng]; const dest: [number, number] = [t.destination_lat, t.destination_lng];
   const has = t.cur_lat != null && (moving || ['ARRIVED', 'DISPATCHED', 'DELIVERED', 'ON_HOLD'].includes(t.status));
-  const markers: any[] = [{ id: 'o', lat: origin[0], lng: origin[1], tone: 'green', kind: 'plant', label: t.origin_name }, { id: 'd', lat: dest[0], lng: dest[1], tone: 'red', kind: 'pin', label: t.destination_name }];
+  const markers: any[] = [{ id: 'o', lat: origin[0], lng: origin[1], tone: 'green', kind: 'plant', label: t.origin_name }, ...(t.stop_count > 1 ? stops.map((s: any) => ({ id: `s${s.seq}`, lat: s.lat, lng: s.lng, tone: s.status === 'DELIVERED' ? 'green' : s.status === 'SKIPPED' ? 'amber' : 'red', kind: 'pin', label: `${s.seq}. ${s.location_name}` })) : [{ id: 'd', lat: dest[0], lng: dest[1], tone: 'red', kind: 'pin', label: t.destination_name }])];
   if (has) markers.push({ id: 'v', lat: t.cur_lat, lng: t.cur_lng, tone: t.status === 'DELAYED' ? 'red' : t.status === 'ON_HOLD' ? 'amber' : 'blue', selected: true, label: `${t.vehicle_code} · ${t.cur_speed_kmh ?? 0} km/h` });
   const routes: any[] = [];
   if (data?.path?.length) routes.push({ id: 'route', path: data.path, color: '#94a3b8', dashed: true, weight: 4 });
@@ -182,7 +186,8 @@ function TrackingTab({ t, moving }: { t: any; moving: boolean }) {
           <li className="flex items-center gap-3"><span className="h-2.5 w-2.5 rounded-full bg-green-500" /><span className="flex-1">{t.origin_name}</span><span className="text-xs text-slate-500">Origin</span></li>
           {(data?.checkpoints ?? []).map((c: any) => { const passed = ['IN_TRANSIT', 'DELAYED', 'ON_HOLD', 'ARRIVED', 'DELIVERED', 'RETURNING', 'COMPLETED'].includes(t.status) && (frac >= c.at || !moving || t.status === 'ARRIVED');
             return <li key={c.name} className="flex items-center gap-3"><span className={`h-2.5 w-2.5 rounded-full ${passed ? 'bg-green-500' : 'bg-slate-300'}`} /><span className="flex-1">{c.name}</span><span className="text-xs text-slate-500">{passed ? 'Passed' : `${Math.round(c.at * 100)}% of route`}</span></li>; })}
-          <li className="flex items-center gap-3"><span className={`h-2.5 w-2.5 rounded-full ${['ARRIVED', 'DELIVERED', 'RETURNING', 'COMPLETED'].includes(t.status) ? 'bg-green-500' : 'bg-red-500'}`} /><span className="flex-1">{t.destination_name}</span><span className="text-xs text-slate-500">Destination</span></li>
+          {t.stop_count > 1 ? stops.map((s: any) => <li key={s.seq} className="flex items-center gap-3"><span className={`h-2.5 w-2.5 rounded-full ${s.status === 'DELIVERED' ? 'bg-green-500' : s.status === 'ARRIVED' ? 'bg-amber-500' : s.status === 'SKIPPED' ? 'bg-slate-400' : 'bg-red-500'}`} /><span className="flex-1">{s.seq}. {s.location_name}</span><span className="text-xs text-slate-500">{s.status === 'PENDING' ? `Stop ${s.seq}` : s.status.charAt(0) + s.status.slice(1).toLowerCase()}</span></li>)
+            : <li className="flex items-center gap-3"><span className={`h-2.5 w-2.5 rounded-full ${['ARRIVED', 'DELIVERED', 'RETURNING', 'COMPLETED'].includes(t.status) ? 'bg-green-500' : 'bg-red-500'}`} /><span className="flex-1">{t.destination_name}</span><span className="text-xs text-slate-500">Destination</span></li>}
         </ul>
         {!has && <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">Live position appears once the vehicle departs.</p>}
       </Section>
@@ -207,8 +212,14 @@ function Resources({ t, nav }: { t: any; nav: (p: string) => void }) {
   );
 }
 
-function Delivery({ t }: { t: any }) {
+function Delivery({ t, stops, onChanged }: { t: any; stops: any[]; onChanged: () => void }) {
   const done = !!t.delivered_at;
+  if (t.stop_count > 1) return (
+    <div className="grid gap-5 md:grid-cols-2">
+      <Section title="Load"><KVGrid cols={2}><KV label="Planned (all stops)">{fmtMt(t.planned_load_mt)}</KV><KV label="Loaded at plant">{fmtMt(t.loaded_mt)}</KV><KV label="Delivered so far">{fmtMt(t.delivered_mt)}</KV><KV label="Not delivered">{t.loaded_mt && t.delivered_mt != null ? `${(Number(t.loaded_mt) - Number(t.delivered_mt)).toFixed(2)} MT` : '—'}</KV></KVGrid></Section>
+      <Section title="Proof of delivery by stop"><StopsPanel trip={t} stops={stops} onChanged={onChanged} /></Section>
+    </div>
+  );
   return (
     <div className="grid gap-5 md:grid-cols-2">
       <Section title="Load"><KVGrid cols={2}><KV label="Planned">{fmtMt(t.planned_load_mt)}</KV><KV label="Loaded at plant">{fmtMt(t.loaded_mt)}</KV><KV label="Delivered">{fmtMt(t.delivered_mt)}</KV><KV label="Variance">{t.loaded_mt && t.delivered_mt ? `${(Number(t.delivered_mt) - Number(t.loaded_mt)).toFixed(2)} MT` : '—'}</KV></KVGrid></Section>
@@ -246,18 +257,28 @@ function Activity({ events }: { events: any[] }) {
   );
 }
 
-function EditTrip({ t, onClose }: { t: any; onClose: () => void }) {
-  const [f, setF] = useState({ load: String(t.planned_load_mt), priority: t.priority, dep: toLocalInput(new Date(t.scheduled_departure)), arr: toLocalInput(new Date(t.planned_arrival)), notes: t.notes ?? '' });
-  const m = useAction(() => patch(`/trips/${t.id}`, { plannedLoadMt: Number(f.load), priority: f.priority, scheduledDeparture: new Date(f.dep).toISOString(), plannedArrival: new Date(f.arr).toISOString(), notes: f.notes }), { invalidate: TRIP_INVALIDATE, success: 'Trip updated.', onSuccess: onClose });
+function EditTrip({ t, stops, onClose }: { t: any; stops: any[]; onClose: () => void }) {
+  const [f, setF] = useState({ priority: t.priority, dep: toLocalInput(new Date(t.scheduled_departure)), arr: toLocalInput(new Date(t.planned_arrival)), notes: t.notes ?? '' });
+  const [rows, setRows] = useState<StopRow[]>(t.trip_type === 'UPLIFTING' ? [] : stops.map((s: any) => ({ dist: s.distributor_id ? { id: s.distributor_id, name: s.distributor_name, city: s.location_city, region: s.location_region, location_id: s.location_id } : null, mt: String(s.planned_mt) })));
+  const [load, setLoad] = useState(String(t.planned_load_mt));
+  const [errs, setErrs] = useState<Record<string, string>>({});
+  const stopsChanged = JSON.stringify(rows.map((r) => [r.dist?.id, Number(r.mt)])) !== JSON.stringify(stops.map((s: any) => [s.distributor_id, Number(s.planned_mt)]));
+  const depChanged = new Date(f.dep).getTime() !== new Date(t.scheduled_departure).getTime(); const arrChanged = new Date(f.arr).getTime() !== new Date(t.planned_arrival).getTime();
+  const m = useAction(() => patch(`/trips/${t.id}`, {
+    priority: f.priority, notes: f.notes, ...(depChanged ? { scheduledDeparture: new Date(f.dep).toISOString() } : {}), ...(arrChanged ? { plannedArrival: new Date(f.arr).toISOString() } : {}),
+    ...(rows.length ? (stopsChanged ? { stops: stopsPayload(rows) } : {}) : { plannedLoadMt: Number(load) }),
+  }), { invalidate: TRIP_INVALIDATE, success: 'Trip updated.', onSuccess: onClose });
+  const save = () => { if (rows.length) { const e = validateStops(rows); setErrs(e); if (Object.keys(e).length) return; } m.mutate(undefined as never); };
   const fe = fieldErrors(m.error);
   return (
-    <Modal open onClose={onClose} title={`Edit ${t.code}`} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={m.isPending} onClick={() => m.mutate(undefined as never)}>Save changes</Button></>}>
+    <Modal open onClose={onClose} size={rows.length ? 'lg' : undefined} title={`Edit ${t.code}`} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={m.isPending} onClick={save}>Save changes</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
         {m.error && !m.error.fields && <div className="sm:col-span-2"><Alert tone="danger">{m.error.message}</Alert></div>}
-        <TextInput label="Planned load (MT)" type="number" step="0.1" value={f.load} onChange={(e) => setF({ ...f, load: e.target.value })} error={fe.plannedLoadMt} />
+        {rows.length > 0 && <div className="sm:col-span-2"><p className="mb-2 text-sm font-semibold">Delivery stops</p>{t.status === 'ASSIGNED' && stopsChanged && <Alert tone="warning" className="mb-2">Unassign the vehicle and driver before changing the stops.</Alert>}<StopsEditor rows={rows} onChange={setRows} errors={errs} originName={t.origin_name} /></div>}
+        {!rows.length && <TextInput label="Planned load (MT)" type="number" step="0.1" value={load} onChange={(e) => setLoad(e.target.value)} error={fe.plannedLoadMt} />}
         <SelectInput label="Priority" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} options={['LOW', 'NORMAL', 'HIGH', 'URGENT'].map((x) => ({ value: x, label: x[0] + x.slice(1).toLowerCase() }))} />
         <TextInput label="Scheduled departure" type="datetime-local" value={f.dep} onChange={(e) => setF({ ...f, dep: e.target.value })} error={fe.scheduledDeparture} />
-        <TextInput label="Planned arrival" type="datetime-local" value={f.arr} onChange={(e) => setF({ ...f, arr: e.target.value })} error={fe.plannedArrival} />
+        <TextInput label="Planned arrival" type="datetime-local" value={f.arr} onChange={(e) => setF({ ...f, arr: e.target.value })} error={fe.plannedArrival} hint={stopsChanged || depChanged ? 'Leave unchanged to recalculate from the route.' : undefined} />
         <div className="sm:col-span-2"><TextArea label="Dispatch notes" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={500} /></div>
         {t.vehicle_id && <p className="flex items-center gap-2 text-xs text-slate-500 sm:col-span-2"><AlertTriangle className="h-3.5 w-3.5" />Changing the schedule or load re-validates the assigned vehicle and driver.</p>}
       </div>

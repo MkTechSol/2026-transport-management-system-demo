@@ -15,7 +15,7 @@ import { useQuery } from '@tanstack/react-query';
 
 export const TRIP_INVALIDATE = ['/trips', '/vehicles', '/drivers', '/tracking', '/me', '/maintenance', '/safety'];
 
-export interface TripLike { id: number; code: string; status: TripStatus; planned_load_mt: number | string; loaded_mt?: number | string | null; vehicle_id?: number | null; driver_id?: number | null; vehicle_code?: string | null; vehicle_odometer_km?: number | null; odometer_start?: number | null; trip_type?: string }
+export interface TripLike { id: number; code: string; status: TripStatus; planned_load_mt: number | string; loaded_mt?: number | string | null; vehicle_id?: number | null; driver_id?: number | null; vehicle_code?: string | null; vehicle_odometer_km?: number | null; odometer_start?: number | null; trip_type?: string; stop_count?: number; stops?: { seq: number; status: string; delivered_mt?: number | string | null }[] }
 
 /* ---------------------------------------------------------------- Assignment drawer */
 export function AssignDrawer({ trip, open, onClose, onDone }: { trip: TripLike; open: boolean; onClose: () => void; onDone?: () => void }) {
@@ -135,7 +135,7 @@ function TransitionDialog({ trip, action, hasPassedPretrip, onClose, onDone, onC
   const needsReason = to === 'ON_HOLD' || to === 'CANCELLED';
   const starting = to === 'IN_TRANSIT' && trip.status === 'DISPATCHED';
   const delivering = to === 'DELIVERED';
-  const [f, setF] = useState({ reason: '', loadedMt: String(trip.planned_load_mt), deliveredMt: String(trip.loaded_mt ?? trip.planned_load_mt), receivedBy: '', deliveryNoteNo: '', podNotes: '', note: '', odometer: String(starting ? (trip.vehicle_odometer_km ?? '') : ''), upliftVoucherNo: '' });
+  const [f, setF] = useState({ reason: '', loadedMt: String(trip.planned_load_mt), deliveredMt: String(Math.max(0, Number(trip.loaded_mt ?? trip.planned_load_mt) - (trip.stops ?? []).filter((x) => x.status === 'DELIVERED').reduce((a, x) => a + Number(x.delivered_mt ?? 0), 0))), receivedBy: '', deliveryNoteNo: '', podNotes: '', note: '', odometer: String(starting ? (trip.vehicle_odometer_km ?? '') : ''), upliftVoucherNo: '' });
   const completing = to === 'COMPLETED';
   const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
   const m = useAction(() => post(`/trips/${trip.id}/transition`, {
@@ -147,7 +147,7 @@ function TransitionDialog({ trip, action, hasPassedPretrip, onClose, onDone, onC
   const copy: Partial<Record<TripStatus, string>> = {
     DISPATCHED: 'This releases the trip to the yard. The assigned vehicle and driver will be marked On Trip and the driver is notified.',
     PLANNED: trip.status === 'ASSIGNED' ? 'The vehicle and driver will be released and the trip returns to Planned.' : 'Confirm the plan so it appears in dispatch.',
-    ARRIVED: 'Confirm the vehicle has reached the destination.', RETURNING: 'Confirm the vehicle has left the customer site and is returning to the plant.',
+    ARRIVED: (trip.stop_count ?? 1) > 1 ? 'Confirm the vehicle has reached the FINAL stop. Earlier stops must be delivered or skipped first.' : 'Confirm the vehicle has reached the destination.', RETURNING: 'Confirm the vehicle has left the customer site and is returning to the plant.',
     COMPLETED: 'Closing the trip releases the vehicle and driver and records the return to the plant.', DELAYED: 'Flag this trip as delayed so managers are alerted.', IN_TRANSIT: starting ? '' : 'Resume the trip.',
   };
   return (

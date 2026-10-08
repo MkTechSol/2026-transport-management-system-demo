@@ -11,6 +11,7 @@ import { Alert, EmptyState, ErrorState, PageLoader, ProgressBar } from '../ui/Fe
 import { StatusPill } from '../ui/Pill';
 import { IncidentModal } from '../features/forms';
 import { TripActionBar } from '../features/trip';
+import { StopsPanel } from '../features/TripStops';
 
 export default function DriverHome() {
   const { user } = useAuth(); const [inc, setInc] = useState<any>(null);
@@ -32,10 +33,11 @@ export default function DriverHome() {
             <article key={t.id} className="card mb-3 overflow-hidden">
               <div className="border-b border-line bg-brand-50/60 px-4 py-3"><div className="flex items-center justify-between"><Link to={`/trips/${t.id}`} className="font-semibold text-brand-700">{t.code}</Link><StatusPill status={t.status} /></div></div>
               <div className="space-y-3 p-4">
-                <div><p className="text-xs text-slate-500">From</p><p className="font-medium">{t.origin_name}</p><p className="my-1 text-slate-300">↓</p><p className="text-xs text-slate-500">To</p><p className="text-lg font-semibold">{t.destination_name}</p><p className="text-sm text-slate-600">{t.distributor_name}</p></div>
+                <div><p className="text-xs text-slate-500">From</p><p className="font-medium">{t.origin_name}</p><p className="my-1 text-slate-300">↓</p><p className="text-xs text-slate-500">{t.stop_count > 1 ? `${t.stop_count} delivery stops` : 'To'}</p><p className="text-lg font-semibold">{t.destination_name}</p><p className="text-sm text-slate-600">{t.distributor_name}</p></div>
                 <div className="grid grid-cols-3 gap-2 text-center"><M label="Load" value={fmtMt(t.loaded_mt ?? t.planned_load_mt)} /><M label="Vehicle" value={t.vehicle_code} /><M label="ETA" value={['ARRIVED', 'DELIVERED'].includes(t.status) ? '—' : fmtEta(t.eta_at)} /></div>
                 {['IN_TRANSIT', 'DELAYED', 'RETURNING'].includes(t.status) && <div><ProgressBar value={Number(t.progress_pct)} tone={t.status === 'DELAYED' ? 'red' : 'blue'} /><p className="mt-1 text-right text-xs text-slate-500">{Math.round(t.progress_pct)}% · {t.cur_speed_kmh ?? 0} km/h</p></div>}
-                <TripActionBar trip={t} actions={actions} onChanged={() => refetch()} />
+                {t.stop_count > 1 && <StopsPanel trip={t} stops={t.stops} compact onChanged={() => refetch()} />}
+                <TripActionBar trip={{ ...t }} actions={actions} onChanged={() => refetch()} />
                 <Button variant="ghost" className="text-red-600" icon={<ShieldAlert className="h-4 w-4" />} onClick={() => setInc(t)}>Report incident on this trip</Button>
               </div>
             </article>

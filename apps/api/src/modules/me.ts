@@ -1,3 +1,4 @@
+import { listStops } from '../services/tripStops';
 import { Router } from 'express';
 import { q, q1 } from '../db/sequelize';
 import { wrap } from '../lib/http';
@@ -18,5 +19,10 @@ meRouter.get('/home', wrap(async (req, res) => {
         AND NOT EXISTS (SELECT 1 FROM documents n WHERE n.doc_type = d.doc_type AND n.expires_on > d.expires_on AND n.driver_id = d.driver_id) ORDER BY d.expires_on`, { id: driverId }),
     q(`SELECT ${TRIP_LIST_SELECT} ${TRIP_LIST_FROM} WHERE t.driver_id = :id AND t.status IN ('COMPLETED') ORDER BY t.completed_at DESC LIMIT 5`, { id: driverId }),
   ]);
+  for (const t of active as any[]) {
+    t.loaded_mt = (await q1<any>('SELECT loaded_mt FROM trips WHERE id = :id', { id: t.id }))?.loaded_mt ?? null;
+    t.stops = await listStops(t.id);
+    for (const s of t.stops) { delete s.freight_per_mt; delete s.bill_to_id; delete s.bill_to_name; }
+  }
   res.json({ driver, activeTrips: active, upcomingTrips: upcoming, documents, recentTrips: recent });
 }));

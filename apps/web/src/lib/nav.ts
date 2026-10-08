@@ -1,5 +1,5 @@
 import type { Permission } from '@gasman/shared';
-import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardList, FileText, Gauge, LayoutGrid, MapPin, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardCheck, ClipboardList, Fuel as FuelIcon, FileText, Gauge, LayoutGrid, MapPin, Receipt, Settings as SettingsIcon, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon; perm?: Permission[]; roles?: string[]; end?: boolean; hideFor?: string[] }
@@ -17,7 +17,13 @@ export const NAV: NavGroup[] = [
     { to: '/fleet', label: 'Fleet', icon: Truck, perm: ['vehicles:view'], hideFor: ['DRIVER'] },
     { to: '/drivers', label: 'Drivers', icon: UserRound, perm: ['drivers:view'], hideFor: ['DRIVER'] },
     { to: '/locations', label: 'Plants & Locations', icon: Building2, perm: ['locations:view'] },
+    { to: '/routes', label: 'Routes & Freight', icon: Waypoints, perm: ['routes:view'], hideFor: ['DRIVER'] },
     { to: '/distributors', label: 'Distributors', icon: Store, perm: ['distributors:view'] },
+  ] },
+  { title: 'Fuel & Expenses', items: [
+    { to: '/fuel', label: 'Fuel', icon: FuelIcon, perm: ['fuel:view'], hideFor: ['DRIVER'] },
+    { to: '/expenses', label: 'Trip Expenses', icon: Receipt, perm: ['expenses:view'], hideFor: ['DRIVER'] },
+    { to: '/approvals', label: 'Approvals', icon: ClipboardCheck, perm: ['approvals:view'] },
   ] },
   { title: 'Compliance & Safety', items: [
     { to: '/maintenance', label: 'Maintenance', icon: Wrench, perm: ['maintenance:view'] },
@@ -31,6 +37,7 @@ export const NAV: NavGroup[] = [
   { title: 'Administration', items: [
     { to: '/audit', label: 'Audit Log', icon: Shield, perm: ['audit:view'] },
     { to: '/users', label: 'Users & Roles', icon: UserCog, perm: ['users:view'] },
+    { to: '/settings', label: 'Settings', icon: SettingsIcon, perm: ['settings:view'] },
   ] },
 ];
 export const _unused = { AlertTriangle, MapPin, Users };

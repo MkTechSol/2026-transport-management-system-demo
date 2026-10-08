@@ -44,6 +44,7 @@ export default function VehicleDetail() {
             <KV label="Capacity">{fmtMt(v.capacity_mt)}</KV><KV label="Make / model">{v.make} {v.model}</KV><KV label="Year">{v.year}</KV>
             <KV label="Home plant">{v.home_plant_name ?? '—'}</KV><KV label="Regular driver">{v.default_driver_id ? <Link className="text-brand-700 hover:underline" to={`/drivers/${v.default_driver_id}`}>{v.default_driver_name}</Link> : '—'}</KV><KV label="Odometer">{fmtNum(v.odometer_km)} km</KV>
             {v.vendor_name && <KV label="Vendor">{v.vendor_name}</KV>}
+            <KV label="Bowzer no.">{v.bowzer_no ?? '—'}</KV><KV label="Chassis no.">{v.chassis_no ?? '—'}</KV><KV label="Engine no.">{v.engine_no ?? '—'}</KV><KV label="Wheels">{v.wheels ?? '—'}</KV><KV label="Owner / partner">{v.owner_name ?? '—'}</KV><KV label="Fuel norm">{v.fuel_norm_kmpl} km/L</KV>
             <KV label="Current location">{v.last_location_name ?? (v.status === 'ON_TRIP' ? 'On the road' : '—')}</KV><KV label="Last position">{timeAgo(v.last_position_at)}</KV>
           </KVGrid></Section>
           <Section title="Utilization (30 days)"><div className="space-y-4">

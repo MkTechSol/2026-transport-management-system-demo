@@ -15,7 +15,7 @@ import { useQuery } from '@tanstack/react-query';
 
 export const TRIP_INVALIDATE = ['/trips', '/vehicles', '/drivers', '/tracking', '/me', '/maintenance', '/safety'];
 
-export interface TripLike { id: number; code: string; status: TripStatus; planned_load_mt: number | string; loaded_mt?: number | string | null; vehicle_id?: number | null; driver_id?: number | null; vehicle_code?: string | null }
+export interface TripLike { id: number; code: string; status: TripStatus; planned_load_mt: number | string; loaded_mt?: number | string | null; vehicle_id?: number | null; driver_id?: number | null; vehicle_code?: string | null; vehicle_odometer_km?: number | null; odometer_start?: number | null; trip_type?: string }
 
 /* ---------------------------------------------------------------- Assignment drawer */
 export function AssignDrawer({ trip, open, onClose, onDone }: { trip: TripLike; open: boolean; onClose: () => void; onDone?: () => void }) {
@@ -135,11 +135,12 @@ function TransitionDialog({ trip, action, hasPassedPretrip, onClose, onDone, onC
   const needsReason = to === 'ON_HOLD' || to === 'CANCELLED';
   const starting = to === 'IN_TRANSIT' && trip.status === 'DISPATCHED';
   const delivering = to === 'DELIVERED';
-  const [f, setF] = useState({ reason: '', loadedMt: String(trip.planned_load_mt), deliveredMt: String(trip.loaded_mt ?? trip.planned_load_mt), receivedBy: '', deliveryNoteNo: '', podNotes: '', note: '' });
+  const [f, setF] = useState({ reason: '', loadedMt: String(trip.planned_load_mt), deliveredMt: String(trip.loaded_mt ?? trip.planned_load_mt), receivedBy: '', deliveryNoteNo: '', podNotes: '', note: '', odometer: String(starting ? (trip.vehicle_odometer_km ?? '') : ''), upliftVoucherNo: '' });
+  const completing = to === 'COMPLETED';
   const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
   const m = useAction(() => post(`/trips/${trip.id}/transition`, {
     to, reason: f.reason || undefined, note: f.note || undefined,
-    ...(starting ? { loadedMt: Number(f.loadedMt) } : {}), ...(delivering ? { deliveredMt: Number(f.deliveredMt), receivedBy: f.receivedBy, deliveryNoteNo: f.deliveryNoteNo || undefined, podNotes: f.podNotes || undefined } : {}),
+    ...(starting ? { loadedMt: Number(f.loadedMt), odometerKm: f.odometer ? Number(f.odometer) : undefined, upliftVoucherNo: f.upliftVoucherNo || undefined } : {}), ...(completing && f.odometer ? { odometerKm: Number(f.odometer) } : {}), ...(delivering ? { deliveredMt: Number(f.deliveredMt), receivedBy: f.receivedBy, deliveryNoteNo: f.deliveryNoteNo || undefined, podNotes: f.podNotes || undefined } : {}),
   }), { invalidate: TRIP_INVALIDATE, success: () => `${trip.code}: ${TRIP_STATUS_LABELS[to] ?? titleCase(to)}`, onSuccess: onDone });
   const fe = fieldErrors(m.error);
   const danger = to === 'CANCELLED';
@@ -158,7 +159,14 @@ function TransitionDialog({ trip, action, hasPassedPretrip, onClose, onDone, onC
         {copy[to] && <p className="text-sm text-slate-600">{copy[to]}</p>}
         {starting && hasPassedPretrip === false && <Alert tone="warning" title="Pre-trip safety check required">A passed pre-trip safety check must be recorded before departure. <button className="font-semibold underline" onClick={onCheck}>Record it now</button></Alert>}
         {starting && hasPassedPretrip && <Alert tone="success"><span className="inline-flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" />Pre-trip safety check passed.</span></Alert>}
-        {starting && <TextInput label="Quantity loaded (MT)" type="number" step="0.01" min="0" value={f.loadedMt} onChange={set('loadedMt')} error={fe.loadedMt} hint={`Planned ${fmtMt(trip.planned_load_mt)}`} />}
+        {starting && <>
+          <div className="grid grid-cols-2 gap-3">
+            <TextInput label={trip.trip_type === 'UPLIFTING' ? 'Quantity uplifted (MT)' : 'Quantity loaded (MT)'} type="number" step="0.01" min="0" value={f.loadedMt} onChange={set('loadedMt')} error={fe.loadedMt} hint={`Planned ${fmtMt(trip.planned_load_mt)}`} />
+            <TextInput label="Meter reading at start (km)" type="number" min="0" value={f.odometer} onChange={set('odometer')} error={fe.odometerKm} />
+          </div>
+          <TextInput label={trip.trip_type === 'UPLIFTING' ? 'Uplifting voucher no.' : 'Loading / delivery order no.'} value={f.upliftVoucherNo} onChange={set('upliftVoucherNo')} hint="Source document number from the loading point" />
+        </>}
+        {completing && <TextInput label="Meter reading at completion (km)" type="number" min="0" value={f.odometer} onChange={set('odometer')} error={fe.odometerKm} hint={trip.odometer_start ? `Start reading was ${trip.odometer_start} km; leave blank to estimate from the route` : 'Leave blank to estimate from the route'} />}
         {needsReason && <TextArea label={to === 'CANCELLED' ? 'Reason for cancellation' : 'Reason for hold'} required value={f.reason} onChange={set('reason')} error={fe.reason} maxLength={250} />}
         {delivering && <>
           <div className="grid grid-cols-2 gap-3"><TextInput label="Delivered quantity (MT)" required type="number" step="0.01" min="0" value={f.deliveredMt} onChange={set('deliveredMt')} error={fe.deliveredMt} hint={`Loaded ${fmtMt(trip.loaded_mt ?? trip.planned_load_mt)}`} />
@@ -166,7 +174,7 @@ function TransitionDialog({ trip, action, hasPassedPretrip, onClose, onDone, onC
           <TextInput label="Received by (name)" required value={f.receivedBy} onChange={set('receivedBy')} error={fe.receivedBy} />
           <TextArea label="Proof-of-delivery notes" value={f.podNotes} onChange={set('podNotes')} maxLength={500} />
         </>}
-        {!needsReason && !delivering && !starting && <TextInput label="Note (optional)" value={f.note} onChange={set('note')} maxLength={200} />}
+        {!needsReason && !delivering && !starting && !completing && <TextInput label="Note (optional)" value={f.note} onChange={set('note')} maxLength={200} />}
         {danger && <p className="flex items-center gap-2 text-xs text-slate-500"><AlertTriangle className="h-3.5 w-3.5" />Cancelled trips cannot be reopened.</p>}
       </div>
     </Modal>

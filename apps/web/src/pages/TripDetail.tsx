@@ -1,11 +1,15 @@
-import { AlertTriangle, ArrowLeft, Building2, Pencil, Phone, ShieldCheck, Truck, UserRound } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Building2, Copy, Fuel, Pencil, Phone, Plus, Receipt, ShieldCheck, Truck, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { MOVING_STATUSES, TRIP_STEPPER, TripStatus, TRIP_STATUS_LABELS } from '@gasman/shared';
 import { get, patch } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDateTime, fmtDuration, fmtEta, fmtMt, fmtShortDateTime, regionLabel, timeAgo, toLocalInput } from '../lib/format';
+import { EXPENSE_CATEGORY_LABELS } from '@gasman/shared';
+import { del } from '../lib/api';
+import { fmtDate, fmtDateTime, fmtDuration, fmtEta, fmtMt, fmtNum, fmtPkr, fmtShortDateTime, regionLabel, timeAgo, toLocalInput } from '../lib/format';
+import { useToast } from '../ui/Toast';
+import { ExpenseModal, FuelModal } from '../features/forms';
 import { fieldErrors, useAction, useDetail } from '../lib/hooks';
 import { Button } from '../ui/Button';
 import { Alert, ErrorState, PageLoader, ProgressBar, EmptyState } from '../ui/Feedback';
@@ -16,16 +20,17 @@ import { Pill, StatusPill } from '../ui/Pill';
 import { MapView } from '../map/MapView';
 import { TripActionBar, TRIP_INVALIDATE } from '../features/trip';
 
-const TABS = [{ key: 'overview', label: 'Overview' }, { key: 'tracking', label: 'Tracking' }, { key: 'resources', label: 'Vehicle & driver' }, { key: 'delivery', label: 'Load & delivery' }, { key: 'safety', label: 'Safety checks' }, { key: 'activity', label: 'Activity' }];
+const TABS = [{ key: 'overview', label: 'Overview' }, { key: 'tracking', label: 'Tracking' }, { key: 'resources', label: 'Vehicle & driver' }, { key: 'fuel', label: 'Fuel' }, { key: 'expenses', label: 'Expenses' }, { key: 'delivery', label: 'Load & delivery' }, { key: 'safety', label: 'Safety checks' }, { key: 'finance', label: 'Finance' }, { key: 'activity', label: 'Activity' }];
 
 export default function TripDetail() {
   const { id } = useParams(); const nav = useNavigate(); const { can } = useAuth();
   const [sp, setSp] = useSearchParams(); const tab = sp.get('tab') ?? 'overview';
-  const [edit, setEdit] = useState(false);
+  const [edit, setEdit] = useState(false); const { toast } = useToast();
   const { data, isLoading, error, refetch } = useDetail<any>(`/trips/${id}`, { refetchInterval: 8000 });
   if (isLoading) return <PageLoader />;
   if (error || !data) return <><Link to="/trips" className="mb-3 inline-flex items-center gap-1 text-sm text-brand-700"><ArrowLeft className="h-4 w-4" />Back to trips</Link><ErrorState error={error} onRetry={() => refetch()} /></>;
-  const { trip: t, events, checks, actions } = data;
+  const { trip: t, events, checks, actions, expenses, fuel, economics } = data;
+  const tripName = `${t.vehicle_code ?? 'Unassigned'} / ${t.origin_name} – ${t.destination_name} / ${new Date(t.scheduled_departure).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Karachi' }).replace(/\//g, '-')}`;
   const status = t.status as TripStatus;
   const base: TripStatus = status === 'DELAYED' ? 'IN_TRANSIT' : status === 'ON_HOLD' ? (t.status_before_hold ?? 'PLANNED') : status;
   const idx = Math.max(0, TRIP_STEPPER.indexOf(base));
@@ -37,10 +42,12 @@ export default function TripDetail() {
       <Breadcrumbs items={[{ label: 'Operations' }, { label: 'Trips', to: '/trips' }, { label: t.code }]} />
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex flex-wrap items-center gap-3"><h1 className="text-2xl font-semibold">{t.code}</h1><StatusPill status={status} />{t.priority !== 'NORMAL' && <Pill tone={t.priority === 'LOW' ? 'slate' : 'red'} dot={false}>{t.priority} priority</Pill>}{t.lpg_source === 'IMPORTED' && <Pill tone="purple" dot={false}>Imported LPG</Pill>}</div>
+          <div className="flex flex-wrap items-center gap-3"><h1 className="text-2xl font-semibold">{t.code}</h1><StatusPill status={status} />{t.priority !== 'NORMAL' && <Pill tone={t.priority === 'LOW' ? 'slate' : 'red'} dot={false}>{t.priority} priority</Pill>}{t.lpg_source === 'IMPORTED' && <Pill tone="purple" dot={false}>Imported LPG</Pill>}{t.trip_type === 'UPLIFTING' && <Pill tone="teal" dot={false}>Uplifting</Pill>}</div>
+          <p className="mt-0.5 text-xs text-slate-500">{tripName}</p>
           <p className="mt-1 text-sm text-slate-600">{t.distributor_name ?? t.destination_name} · <b>{t.origin_name}</b> → <b>{t.destination_name}</b> ({regionLabel(t.destination_region)})</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {t.public_token && !['DRAFT', 'CANCELLED'].includes(status) && <Button icon={<Copy className="h-4 w-4" />} onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/track/${t.public_token}`); toast('success', 'Customer tracking link copied.'); }}>Tracking link</Button>}
           {editable && <Button icon={<Pencil className="h-4 w-4" />} onClick={() => setEdit(true)}>Edit</Button>}
           <TripActionBar trip={t} actions={actions} hasPassedPretrip={passed} onChanged={() => refetch()} autoAssign={sp.get('assign') === '1'} />
         </div>
@@ -62,10 +69,13 @@ export default function TripDetail() {
         </div>
       )}
 
-      <Tabs tabs={TABS.map((x) => (x.key === 'safety' ? { ...x, count: checks.length } : x))} value={tab} onChange={(k) => setSp((p) => { const n = new URLSearchParams(p); n.set('tab', k); n.delete('assign'); return n; }, { replace: true })} />
+      <Tabs tabs={TABS.filter((x) => x.key !== 'finance' || can('finance:view')).map((x) => (x.key === 'safety' ? { ...x, count: checks.length } : x.key === 'expenses' ? { ...x, count: expenses.length } : x.key === 'fuel' ? { ...x, count: fuel.length } : x))} value={tab} onChange={(k) => setSp((p) => { const n = new URLSearchParams(p); n.set('tab', k); n.delete('assign'); return n; }, { replace: true })} />
       {tab === 'overview' && <Overview t={t} />}
       {tab === 'tracking' && <TrackingTab t={t} moving={moving} />}
       {tab === 'resources' && <Resources t={t} nav={nav} />}
+      {tab === 'fuel' && <FuelTab t={t} fuel={fuel} onChanged={() => refetch()} />}
+      {tab === 'expenses' && <ExpensesTab t={t} expenses={expenses} onChanged={() => refetch()} />}
+      {tab === 'finance' && can('finance:view') && <FinanceTab t={t} e={economics} />}
       {tab === 'delivery' && <Delivery t={t} />}
       {tab === 'safety' && <SafetyTab checks={checks} />}
       {tab === 'activity' && <Activity events={events} />}
@@ -75,6 +85,59 @@ export default function TripDetail() {
 }
 
 const Stat = ({ label, value, sub, children }: any) => <div className="card p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>{sub && <p className="text-xs text-slate-500">{sub}</p>}{children}</div>;
+
+function FuelTab({ t, fuel, onChanged }: { t: any; fuel: any[]; onChanged: () => void }) {
+  const { can } = useAuth(); const [add, setAdd] = useState(false);
+  const total = fuel.reduce((s, f) => s + Number(f.amount), 0); const litres = fuel.reduce((s, f) => s + Number(f.litres), 0);
+  const canRecord = can('fuel:record') && t.vehicle_id && ['DISPATCHED', 'IN_TRANSIT', 'DELAYED', 'ON_HOLD', 'ARRIVED', 'DELIVERED', 'RETURNING', 'COMPLETED'].includes(t.status);
+  return (
+    <Section padded={false} title="Fuel fills" subtitle={`${fmtNum(litres)} L · ${fmtPkr(total)}`} actions={canRecord && <Button size="sm" variant="primary" icon={<Fuel className="h-4 w-4" />} onClick={() => setAdd(true)}>Record fuel</Button>}>
+      <table className="w-full"><thead className="bg-slate-50/70"><tr><th className="th">When</th><th className="th">Station</th><th className="th text-right">Litres</th><th className="th text-right">Rate</th><th className="th text-right">Amount</th><th className="th text-right">km/L</th><th className="th">Validation</th></tr></thead>
+        <tbody className="divide-y divide-line">{fuel.map((f) => <tr key={f.id}><td className="td whitespace-nowrap">{fmtShortDateTime(f.fueled_at)}</td><td className="td text-slate-600">{f.station ?? '—'}</td><td className="td text-right tabular-nums">{f.litres}</td><td className="td text-right tabular-nums">{f.rate_per_l}</td><td className="td text-right tabular-nums">{fmtPkr(f.amount)}</td><td className="td text-right tabular-nums">{f.kmpl ?? '—'}</td>
+          <td className="td"><StatusPill status={f.status} />{f.flag_reason && <p className="mt-1 max-w-xs text-xs text-red-600">{f.flag_reason}</p>}</td></tr>)}
+          {!fuel.length && <tr><td colSpan={7} className="td py-10 text-center text-slate-500">No fuel recorded for this trip.</td></tr>}</tbody></table>
+      {add && <FuelModal vehicleId={t.vehicle_id} vehicleCode={t.vehicle_code} tripId={t.id} tripCode={t.code} odometer={t.vehicle_odometer_km} onClose={() => { setAdd(false); onChanged(); }} />}
+    </Section>
+  );
+}
+
+function ExpensesTab({ t, expenses, onChanged }: { t: any; expenses: any[]; onChanged: () => void }) {
+  const { can } = useAuth(); const [add, setAdd] = useState(false);
+  const rm = useAction((id: number) => del(`/expenses/${id}`), { invalidate: ['/trips', '/expenses', '/approvals'], success: 'Expense removed.', onSuccess: onChanged });
+  const approved = expenses.filter((e) => ['APPROVED', 'REIMBURSED'].includes(e.status)).reduce((s, e) => s + Number(e.amount), 0);
+  const pending = expenses.filter((e) => e.status === 'SUBMITTED').reduce((s, e) => s + Number(e.amount), 0);
+  const canRecord = can('expenses:record') && ['DISPATCHED', 'IN_TRANSIT', 'DELAYED', 'ON_HOLD', 'ARRIVED', 'DELIVERED', 'RETURNING', 'COMPLETED'].includes(t.status);
+  return (
+    <Section padded={false} title="Trip expense vouchers" subtitle={`Approved ${fmtPkr(approved)} · pending ${fmtPkr(pending)}`} actions={canRecord && <Button size="sm" variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setAdd(true)}>Add expense</Button>}>
+      <table className="w-full"><thead className="bg-slate-50/70"><tr><th className="th">Date</th><th className="th">Category</th><th className="th">Details</th><th className="th text-right">Amount</th><th className="th">Status</th><th className="th" /></tr></thead>
+        <tbody className="divide-y divide-line">{expenses.map((e) => <tr key={e.id}><td className="td whitespace-nowrap">{fmtDate(e.incurred_on)}</td><td className="td font-medium">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}{e.nights ? ` · ${e.nights} night(s)` : ''}</td>
+          <td className="td text-slate-600">{e.description ?? '—'}{e.decision_note && e.status === 'REJECTED' && <p className="text-xs text-red-600">{e.decision_note}</p>}</td><td className="td text-right tabular-nums">{fmtPkr(e.amount)}</td><td className="td"><StatusPill status={e.status} /></td>
+          <td className="td text-right">{e.status === 'SUBMITTED' && can('expenses:record') && <Button size="sm" variant="ghost" onClick={() => rm.mutate(e.id)}>Remove</Button>}</td></tr>)}
+          {!expenses.length && <tr><td colSpan={6} className="td py-10 text-center text-slate-500">No expenses recorded yet. Fuel fills appear here automatically.</td></tr>}</tbody></table>
+      {add && <ExpenseModal tripId={t.id} tripCode={t.code} onClose={() => { setAdd(false); onChanged(); }} />}
+    </Section>
+  );
+}
+
+function FinanceTab({ t, e }: { t: any; e: any }) {
+  return (
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Section title="Trip profitability" subtitle={e.incomeBasis === 'ACTUAL' ? 'Based on delivered quantity' : 'Expected — based on planned/loaded quantity'}>
+        <dl className="space-y-3 text-sm">
+          <Row label="Freight rate"><b>{fmtPkr(e.freightPerMt)}</b> / MT</Row><Row label="Billable quantity">{fmtMt(e.billableMt, 2)}</Row>
+          <Row label="Freight income"><b className="tabular-nums">{fmtPkr(e.income)}</b></Row><Row label="Approved expenses"><span className="tabular-nums">− {fmtPkr(e.expensesApproved)}</span></Row>
+          {e.expensesPending > 0 && <Row label="Pending approval"><span className="tabular-nums text-amber-700">{fmtPkr(e.expensesPending)}</span></Row>}
+          <div className="border-t border-line pt-3"><Row label="Profit"><b className={`text-lg tabular-nums ${e.profit < 0 ? 'text-red-600' : 'text-green-700'}`}>{fmtPkr(e.profit)}</b></Row></div>
+          <Row label="Margin">{e.marginPct == null ? '—' : `${e.marginPct}%`}</Row>
+        </dl>
+      </Section>
+      <Section title="Distance & meter">
+        <KVGrid cols={2}><KV label="Start meter">{t.odometer_start != null ? `${fmtNum(t.odometer_start)} km` : '—'}</KV><KV label="End meter">{t.odometer_end != null ? `${fmtNum(t.odometer_end)} km` : '—'}</KV><KV label="Distance run">{e.km != null ? `${fmtNum(e.km)} km` : '—'}</KV><KV label="Cost per km">{e.km ? fmtPkr(Math.round(e.expensesApproved / e.km)) : '—'}</KV><KV label="Uplifting voucher">{t.uplift_voucher_no ?? '—'}</KV><KV label="Billed to">{t.bill_to_id ? <Link className="text-brand-700 hover:underline" to={`/distributors/${t.bill_to_id}`}>Customer #{t.bill_to_id}</Link> : '—'}</KV></KVGrid>
+      </Section>
+    </div>
+  );
+}
+const Row = ({ label, children }: any) => <div className="flex items-center justify-between"><dt className="text-slate-600">{label}</dt><dd>{children}</dd></div>;
 
 function Overview({ t }: { t: any }) {
   const times: [string, any][] = [['Scheduled departure', t.scheduled_departure], ['Dispatched', t.dispatched_at], ['Departed', t.departed_at], ['Planned arrival', t.planned_arrival], ['Arrived', t.arrived_at], ['Delivered', t.delivered_at], ['Return started', t.return_started_at], ['Completed', t.completed_at]];
@@ -87,6 +150,7 @@ function Overview({ t }: { t: any }) {
           <KV label="Distributor">{t.distributor_id ? <Link className="text-brand-700 hover:underline" to={`/distributors/${t.distributor_id}`}>{t.distributor_name}</Link> : '—'}</KV>
           <KV label="Route">{t.distance_km ? `${t.distance_km} km · ~${fmtDuration(t.est_duration_min)}` : '—'}</KV>
           <KV label="LPG source">{t.lpg_source === 'LOCAL' ? 'Local' : 'Imported'}</KV><KV label="Planned load">{fmtMt(t.planned_load_mt)}</KV>
+          <KV label="Meter reading (start → end)">{t.odometer_start != null ? `${fmtNum(t.odometer_start)} → ${t.odometer_end != null ? fmtNum(t.odometer_end) : '…'} km` : '—'}</KV><KV label={t.trip_type === 'UPLIFTING' ? 'Uplifting voucher' : 'Loading order'}>{t.uplift_voucher_no ?? '—'}</KV>
           <KV label="Loaded">{fmtMt(t.loaded_mt)}</KV><KV label="Delivered">{fmtMt(t.delivered_mt)}</KV>
           {t.delay_minutes > 0 && <KV label="Delay">{t.delay_minutes} min</KV>}
           {t.notes && <KV label="Dispatch notes" className="col-span-2">{t.notes}</KV>}
@@ -131,7 +195,7 @@ function Resources({ t, nav }: { t: any; nav: (p: string) => void }) {
     <div className="grid gap-5 md:grid-cols-2">
       <Section title="Vehicle" actions={<Button size="sm" variant="ghost" onClick={() => nav(`/fleet/${t.vehicle_id}`)}>Open vehicle</Button>}>
         <div className="mb-4 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><Truck className="h-5 w-5" /></div><div><p className="font-semibold">{t.vehicle_code}</p><p className="text-sm text-slate-500">{t.registration_no}</p></div></div>
-        <KVGrid cols={2}><KV label="Capacity">{fmtMt(t.vehicle_capacity_mt)}</KV><KV label="Fleet">{t.vehicle_fleet_type === 'HIRED' ? 'Hired' : 'Owned'}</KV></KVGrid>
+        <KVGrid cols={2}><KV label="Capacity">{fmtMt(t.vehicle_capacity_mt)}</KV><KV label="Fleet">{t.vehicle_fleet_type === 'HIRED' ? 'Hired' : 'Owned'}</KV><KV label="Bowzer no.">{t.bowzer_no ?? '—'}</KV><KV label="Owner">{t.owner_name ?? '—'}</KV></KVGrid>
       </Section>
       <Section title="Driver" actions={<Button size="sm" variant="ghost" onClick={() => nav(`/drivers/${t.driver_id}`)}>Open driver</Button>}>
         <div className="mb-4 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-lg bg-violet-50 text-violet-600"><UserRound className="h-5 w-5" /></div><div><p className="font-semibold">{t.driver_name}</p><p className="text-sm text-slate-500">{t.driver_employee_id}</p></div></div>

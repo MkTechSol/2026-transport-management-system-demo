@@ -41,11 +41,11 @@ export default function Reports() {
   };
   const exportCsv = async () => { setBusy(true); try { await download(`/reports/${state.type}${qs({ ...params, page: undefined, pageSize: undefined, format: 'csv' })}`, `gasman-${state.type}-${state.from}_${state.to}.csv`); toast('success', 'Report exported.'); } catch (e: any) { toast('error', e.message); } finally { setBusy(false); } };
   const cols = (rep?.columns ?? []).map((c: any) => ({ key: c.key, header: c.label, className: c.type === 'number' || c.type === 'percent' ? 'text-right' : undefined, render: (r: any) => cell(c, r) }));
-  const showFilter = (k: string) => ({ trips: ['plant', 'vehicle', 'driver', 'region', 'status'], 'completed-trips': ['plant', 'vehicle', 'driver', 'region'], 'delayed-trips': ['plant', 'vehicle', 'driver', 'region'], 'fleet-utilization': ['plant', 'vehicle'], 'driver-activity': ['plant', 'driver'], maintenance: ['vehicle', 'status'], 'document-expiry': ['vehicle', 'driver'], 'dispatch-summary': ['plant', 'region'] } as Record<string, string[]>)[state.type]?.includes(k);
+  const showFilter = (k: string) => ({ 'trip-profitability': ['plant', 'vehicle', 'driver', 'region'], 'owner-pnl': ['vehicle'], 'fuel-efficiency': ['vehicle'], 'expense-summary': ['vehicle'], trips: ['plant', 'vehicle', 'driver', 'region', 'status'], 'completed-trips': ['plant', 'vehicle', 'driver', 'region'], 'delayed-trips': ['plant', 'vehicle', 'driver', 'region'], 'fleet-utilization': ['plant', 'vehicle'], 'driver-activity': ['plant', 'driver'], maintenance: ['vehicle', 'status'], 'document-expiry': ['vehicle', 'driver'], 'dispatch-summary': ['plant', 'region'] } as Record<string, string[]>)[state.type]?.includes(k);
   return (
     <>
       <PageHeader title="Reports & Analytics" subtitle="Live reports straight from operational data" breadcrumbs={[{ label: 'Insights' }, { label: 'Reports' }]} actions={can('reports:export') && <Button variant="primary" icon={<Download className="h-4 w-4" />} loading={busy} onClick={exportCsv}>Export CSV</Button>} />
-      <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+      <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {(list.data?.reports ?? []).map((r: any) => <button key={r.key} onClick={() => set({ type: r.key, status: undefined })} title={r.description} className={clsx('rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition-colors', state.type === r.key ? 'border-brand-600 bg-brand-600 text-white' : 'border-line bg-white hover:border-brand-500')}>{r.title}</button>)}
       </div>
       {rep && <Alert tone="info" className="mb-4">{rep.description}</Alert>}

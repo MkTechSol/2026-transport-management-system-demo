@@ -4,7 +4,7 @@ import { DOC_TYPE_LABELS } from '@gasman/shared';
 import { useQuery } from '@tanstack/react-query';
 import { get, qs } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDate, fmtEta, fmtNum, regionLabel, timeAgo } from '../lib/format';
+import { fmtDate, fmtEta, fmtNum, fmtPkr, regionLabel, timeAgo } from '../lib/format';
 import { useQueryState } from '../lib/hooks';
 import { Button } from '../ui/Button';
 import { ErrorState, ProgressBar, Skeleton } from '../ui/Feedback';
@@ -50,6 +50,15 @@ export default function ControlTower() {
             <KpiCard loading={isLoading} label="Open incidents" value={k?.openIncidents} hint={`${k?.seriousIncidents ?? 0} high / critical`} tone={k?.seriousIncidents ? 'red' : 'slate'} icon={<ShieldAlert className="h-5 w-5" />} to="/safety?tab=incidents" />
           </div>
 
+          {data?.finance && (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <KpiCard label="Trip income (MTD)" value={fmtPkr(data.finance.incomeMtd)} hint={data.finance.incomePrevMonth ? `Last month ${fmtPkr(data.finance.incomePrevMonth)}` : 'Freight on delivered MT'} tone="green" to="/reports?type=trip-profitability" />
+              <KpiCard label="Trip expenses (MTD)" value={fmtPkr(data.finance.expensesMtd)} hint="Approved & reimbursed" tone="red" to="/expenses?status=APPROVED" />
+              <KpiCard label="Trip profit (MTD)" value={fmtPkr(data.finance.profitMtd)} hint={data.finance.marginPct == null ? '' : `${data.finance.marginPct}% margin`} tone={data.finance.profitMtd < 0 ? 'red' : 'blue'} to="/reports?type=owner-pnl" />
+              <KpiCard label="Expenses awaiting approval" value={data.finance.pendingExpenseCount} hint={fmtPkr(data.finance.pendingExpenseAmount)} tone="amber" to="/approvals" />
+              <KpiCard label="Fuel exceptions" value={data.finance.fuelFlagged} hint="Flagged for review" tone={data.finance.fuelFlagged ? 'amber' : 'slate'} to="/fuel?tab=exceptions" />
+            </div>
+          )}
           <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
             <Section title="Live trip operations" subtitle="Current movement and assignment status" padded={false} actions={<Link to="/trips?scope=active" className="text-sm font-medium text-brand-700 hover:underline">View all trips</Link>}>
               <div className="overflow-x-auto">

@@ -11,6 +11,7 @@ import { TextInput } from '../ui/Form';
 const DEMO = [
   ['SUPER_ADMIN', 'superadmin@gasman-demo.local'], ['TRANSPORT_MANAGER', 'transport.manager@gasman-demo.local'], ['DISPATCHER', 'dispatcher@gasman-demo.local'],
   ['FLEET_MANAGER', 'fleet.manager@gasman-demo.local'], ['DRIVER', 'driver@gasman-demo.local'], ['MANAGEMENT_VIEWER', 'management@gasman-demo.local'],
+  ['ACCOUNTANT', 'accountant@gasman-demo.local'], ['STORE_MANAGER', 'store.manager@gasman-demo.local'], ['HR_MANAGER', 'hr.manager@gasman-demo.local'],
 ] as const;
 const DEMO_PASSWORD = 'GasMan@Demo2026';
 

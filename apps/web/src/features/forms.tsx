@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { DOC_TYPES, DOC_TYPE_LABELS, DRIVER_STATUSES, INCIDENT_CATEGORIES, INCIDENT_SEVERITIES, MAINTENANCE_TYPES, REGIONS, VEHICLE_STATUSES } from '@gasman/shared';
-import { patch, post } from '../lib/api';
+import { DOC_TYPES, DOC_TYPE_LABELS, DRIVER_STATUSES, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, INCIDENT_CATEGORIES, INCIDENT_SEVERITIES, MAINTENANCE_TYPES, PAYMENT_MODES, REGIONS, VEHICLE_STATUSES } from '@gasman/shared';
+import { useQuery } from '@tanstack/react-query';
+import { get, patch, post } from '../lib/api';
 import { fieldErrors, useAction } from '../lib/hooks';
 import { regionLabel, titleCase } from '../lib/format';
 import { Button } from '../ui/Button';
@@ -16,9 +17,10 @@ export function VehicleForm({ vehicle, onClose, onSaved }: { vehicle?: any; onCl
   const [f, setF] = useState({
     code: vehicle?.code ?? '', registrationNo: vehicle?.registration_no ?? '', fleetType: vehicle?.fleet_type ?? 'OWNED', capacityMt: String(vehicle?.capacity_mt ?? ''), make: vehicle?.make ?? '', model: vehicle?.model ?? '',
     year: String(vehicle?.year ?? ''), status: vehicle?.status ?? 'AVAILABLE', homePlantId: String(vehicle?.home_plant_id ?? ''), defaultDriverId: String(vehicle?.default_driver_id ?? ''), vendorName: vehicle?.vendor_name ?? '', odometerKm: String(vehicle?.odometer_km ?? 0),
+    bowzerNo: vehicle?.bowzer_no ?? '', chassisNo: vehicle?.chassis_no ?? '', engineNo: vehicle?.engine_no ?? '', wheels: String(vehicle?.wheels ?? ''), ownerName: vehicle?.owner_name ?? '', fuelNormKmpl: String(vehicle?.fuel_norm_kmpl ?? '2.6'),
   });
   const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
-  const body = () => ({ code: f.code, registrationNo: f.registrationNo, fleetType: f.fleetType, capacityMt: f.capacityMt === '' ? undefined : Number(f.capacityMt), make: f.make || null, model: f.model || null, year: f.year ? Number(f.year) : null, homePlantId: f.homePlantId ? Number(f.homePlantId) : null, defaultDriverId: f.defaultDriverId ? Number(f.defaultDriverId) : null, vendorName: f.fleetType === 'HIRED' ? f.vendorName || null : null, odometerKm: Number(f.odometerKm || 0), ...(vehicle ? { status: f.status } : {}) });
+  const body = () => ({ code: f.code, registrationNo: f.registrationNo, fleetType: f.fleetType, capacityMt: f.capacityMt === '' ? undefined : Number(f.capacityMt), make: f.make || null, model: f.model || null, year: f.year ? Number(f.year) : null, homePlantId: f.homePlantId ? Number(f.homePlantId) : null, defaultDriverId: f.defaultDriverId ? Number(f.defaultDriverId) : null, vendorName: f.fleetType === 'HIRED' ? f.vendorName || null : null, odometerKm: Number(f.odometerKm || 0), bowzerNo: f.bowzerNo || null, chassisNo: f.chassisNo || null, engineNo: f.engineNo || null, wheels: f.wheels ? Number(f.wheels) : null, ownerName: f.ownerName || null, fuelNormKmpl: Number(f.fuelNormKmpl || 2.6), ...(vehicle ? { status: f.status } : {}) });
   const m = useAction(() => (vehicle ? patch(`/vehicles/${vehicle.id}`, body()) : post('/vehicles', body())), { invalidate: ['/vehicles'], success: vehicle ? 'Vehicle updated.' : 'Vehicle added to the fleet.', onSuccess: (r) => { onSaved?.(r.vehicle); onClose(); } });
   const fe = fieldErrors(m.error);
   return (
@@ -32,7 +34,10 @@ export function VehicleForm({ vehicle, onClose, onSaved }: { vehicle?: any; onCl
         {f.fleetType === 'HIRED' && <TextInput label="Vendor / owner" value={f.vendorName} onChange={set('vendorName')} wrapperClassName="sm:col-span-2" />}
         <TextInput label="Make" value={f.make} onChange={set('make')} /><TextInput label="Model" value={f.model} onChange={set('model')} />
         <TextInput label="Year" type="number" value={f.year} onChange={set('year')} error={fe.year} /><TextInput label="Odometer (km)" type="number" value={f.odometerKm} onChange={set('odometerKm')} error={fe.odometerKm} />
-        <SelectInput label="Home plant" value={f.homePlantId} onChange={set('homePlantId')} placeholder="—" options={(plants.data?.data ?? []).map((p: any) => ({ value: p.id, label: p.name }))} />
+        <TextInput label="Bowzer no." value={f.bowzerNo} onChange={set('bowzerNo')} placeholder="B-175" /><TextInput label="Number of wheels" type="number" value={f.wheels} onChange={set('wheels')} error={fe.wheels} />
+        <TextInput label="Chassis no." value={f.chassisNo} onChange={set('chassisNo')} /><TextInput label="Engine no." value={f.engineNo} onChange={set('engineNo')} />
+        <TextInput label="Owner / partner name" value={f.ownerName} onChange={set('ownerName')} hint="Used for bowzer-owner profit & loss" /><TextInput label="Fuel norm (km per litre)" type="number" step="0.1" value={f.fuelNormKmpl} onChange={set('fuelNormKmpl')} error={fe.fuelNormKmpl} hint="Fuel entries above this norm are flagged" />
+        <SelectInput label="Home plant" value={f.homePlantId} onChange={set('homePlantId')} placeholder="—" options={(plants.data?.data ?? []).filter((p: any) => p.type !== 'FIELD').map((p: any) => ({ value: p.id, label: p.name }))} />
         <SelectInput label="Regular driver" value={f.defaultDriverId} onChange={set('defaultDriverId')} placeholder="—" options={(drivers.data?.data ?? []).map((d: any) => ({ value: d.id, label: `${d.full_name} (${d.employee_id})` }))} />
         {vehicle && <SelectInput label="Status" value={f.status} onChange={set('status')} error={fe.status} options={VEHICLE_STATUSES.map((s) => ({ value: s, label: titleCase(s), disabled: s === 'ON_TRIP' && vehicle.status !== 'ON_TRIP' }))} hint="On Trip is set automatically when a trip is dispatched." />}
       </div>
@@ -125,3 +130,50 @@ export function IncidentModal({ onClose, tripId, vehicleId }: { onClose: () => v
   );
 }
 export const _r = { REGIONS, regionLabel };
+
+export function ExpenseModal({ tripId: fixedTripId, tripCode, onClose }: { tripId?: number; tripCode?: string; onClose: () => void }) {
+  const activeTrips = useQuery({ queryKey: ['/trips', 'active-options'], queryFn: () => get('/trips?scope=active&pageSize=100&sort=code&dir=asc'), enabled: !fixedTripId, staleTime: 30_000 });
+  const [tripSel, setTripSel] = useState('');
+  const tripId = fixedTripId ?? Number(tripSel);
+  const [f, setF] = useState({ category: 'TOLL', amount: '', nights: '', description: '', receiptNo: '', incurredOn: new Date().toISOString().slice(0, 10) });
+  const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
+  const m = useAction(() => post('/expenses', { tripId, category: f.category, amount: Number(f.amount), nights: f.category === 'TOUR_STAY' && f.nights ? Number(f.nights) : undefined, description: f.description || undefined, receiptNo: f.receiptNo || undefined, incurredOn: f.incurredOn }),
+    { invalidate: ['/trips', '/expenses', '/approvals', '/fuel'], success: (r: any) => (r.expense.status === 'APPROVED' ? 'Expense recorded and auto-approved.' : 'Expense submitted for approval.'), onSuccess: onClose });
+  const fe = fieldErrors(m.error);
+  return (
+    <Modal open onClose={onClose} title="Trip expense voucher" description={tripCode} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={m.isPending} disabled={!f.amount || !tripId} onClick={() => m.mutate(undefined as never)}>Save expense (F10)</Button></>}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {err(m)}
+        {!fixedTripId && <SelectInput label="Trip" required value={tripSel} onChange={(e) => setTripSel(e.target.value)} placeholder="Select an active trip" options={(activeTrips.data?.data ?? []).map((t: any) => ({ value: t.id, label: `${t.code} — ${t.vehicle_code ?? ''} → ${t.destination_name}` }))} wrapperClassName="sm:col-span-2" />}
+        <SelectInput label="Category" value={f.category} onChange={set('category')} options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: EXPENSE_CATEGORY_LABELS[c] }))} />
+        <TextInput label="Amount (PKR)" required type="number" min="1" value={f.amount} onChange={set('amount')} error={fe.amount} />
+        {f.category === 'TOUR_STAY' && <TextInput label="Number of nights" required type="number" min="1" value={f.nights} onChange={set('nights')} error={fe.nights} hint="Tour stay / halt days" />}
+        <TextInput label="Date" type="date" value={f.incurredOn} onChange={set('incurredOn')} /><TextInput label="Receipt / voucher no." value={f.receiptNo} onChange={set('receiptNo')} />
+        <TextInput label="Description" value={f.description} onChange={set('description')} wrapperClassName="sm:col-span-2" maxLength={250} />
+        <p className="text-xs text-slate-500 sm:col-span-2">Amounts up to the auto-approval limit are approved immediately; larger expenses go to the Approval Center.</p>
+      </div>
+    </Modal>
+  );
+}
+
+export function FuelModal({ vehicleId, tripId, tripCode, vehicleCode, odometer, onClose }: { vehicleId?: number; tripId?: number; tripCode?: string; vehicleCode?: string; odometer?: number; onClose: () => void }) {
+  const vehicles = useVehicleOptions();
+  const [f, setF] = useState({ vehicleId: String(vehicleId ?? ''), station: '', litres: '', ratePerL: '', odometerKm: odometer ? String(odometer) : '', paymentMode: 'CASH', receiptNo: '' });
+  const set = (k: string) => (e: any) => setF((s) => ({ ...s, [k]: e.target.value }));
+  const amount = Math.round(Number(f.litres || 0) * Number(f.ratePerL || 0));
+  const m = useAction(() => post('/fuel', { vehicleId: Number(f.vehicleId), tripId, station: f.station || undefined, litres: Number(f.litres), ratePerL: Number(f.ratePerL), odometerKm: f.odometerKm ? Number(f.odometerKm) : undefined, paymentMode: f.paymentMode, receiptNo: f.receiptNo || undefined }),
+    { invalidate: ['/fuel', '/trips', '/expenses', '/vehicles'], success: (r: any) => (r.fuel.status === 'FLAGGED' ? 'Fuel entry recorded but FLAGGED for review.' : 'Fuel entry recorded and validated.'), onSuccess: onClose });
+  const fe = fieldErrors(m.error);
+  return (
+    <Modal open onClose={onClose} title="Record fuel" description={tripCode ? `${tripCode} · ${vehicleCode ?? ''}` : 'Vehicle fuel fill'} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={m.isPending} disabled={!f.vehicleId || !f.litres || !f.ratePerL} onClick={() => m.mutate(undefined as never)}>Save fuel (F10)</Button></>}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {err(m)}
+        <SelectInput label="Vehicle" required value={f.vehicleId} onChange={set('vehicleId')} disabled={!!vehicleId} placeholder="Select vehicle" options={(vehicles.data?.data ?? []).map((v: any) => ({ value: v.id, label: `${v.code} — ${v.registration_no}` }))} wrapperClassName="sm:col-span-2" error={fe.vehicleId} />
+        <TextInput label="Litres" required type="number" step="0.1" min="0" value={f.litres} onChange={set('litres')} error={fe.litres} /><TextInput label="Rate per litre (PKR)" required type="number" step="0.1" min="0" value={f.ratePerL} onChange={set('ratePerL')} error={fe.ratePerL} />
+        <TextInput label="Odometer (km)" type="number" value={f.odometerKm} onChange={set('odometerKm')} error={fe.odometerKm} hint="Used to validate consumption against the fuel norm" /><SelectInput label="Payment" value={f.paymentMode} onChange={set('paymentMode')} options={PAYMENT_MODES.map((p) => ({ value: p, label: titleCase(p) }))} />
+        <TextInput label="Fuel station" value={f.station} onChange={set('station')} /><TextInput label="Receipt no." value={f.receiptNo} onChange={set('receiptNo')} />
+        <p className="text-sm font-medium sm:col-span-2">Amount: <b className="tabular-nums">PKR {amount.toLocaleString('en-US')}</b></p>
+      </div>
+    </Modal>
+  );
+}

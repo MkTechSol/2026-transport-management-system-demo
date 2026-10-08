@@ -534,7 +534,7 @@ export async function tripActions(t: any, user: AuthUser) {
 
 export async function getTripDetail(id: number, user: AuthUser) {
   const t = await q1<any>(
-    `SELECT t.*, v.code AS vehicle_code, v.registration_no, v.capacity_mt AS vehicle_capacity_mt, v.fleet_type AS vehicle_fleet_type,
+    `SELECT t.*, v.code AS vehicle_code, v.registration_no, v.capacity_mt AS vehicle_capacity_mt, v.fleet_type AS vehicle_fleet_type, v.odometer_km AS vehicle_odometer_km, v.bowzer_no, v.owner_name,
             d.full_name AS driver_name, d.phone AS driver_phone, d.employee_id AS driver_employee_id,
             o.name AS origin_name, o.city AS origin_city, o.lat AS origin_lat, o.lng AS origin_lng,
             dl.name AS destination_name, dl.city AS destination_city, dl.region AS destination_region, dl.lat AS destination_lat, dl.lng AS destination_lng,

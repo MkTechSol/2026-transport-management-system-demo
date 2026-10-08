@@ -26,7 +26,8 @@ export default function Fleet() {
   const cols: Column<any>[] = [
     { key: 'code', header: 'Vehicle', sortKey: 'code', render: (v) => <div><p className="font-semibold text-brand-700">{v.code}</p><p className="text-xs text-slate-500">{v.registration_no}</p></div> },
     { key: 'type', header: 'Type', hideBelow: 'md', render: (v) => <div><p>{v.make} {v.model}</p><p className="text-xs text-slate-500">{v.year}</p></div> },
-    { key: 'fleet', header: 'Fleet', sortKey: 'fleet', hideBelow: 'md', render: (v) => <Pill tone={v.fleet_type === 'HIRED' ? 'purple' : 'blue'} dot={false}>{v.fleet_type === 'HIRED' ? 'Hired' : 'Owned'}</Pill> },
+    { key: 'fleet', header: 'Fleet / owner', sortKey: 'fleet', hideBelow: 'md', render: (v) => <div><Pill tone={v.fleet_type === 'HIRED' ? 'purple' : 'blue'} dot={false}>{v.fleet_type === 'HIRED' ? 'Hired' : 'Owned'}</Pill><p className="mt-1 max-w-[10rem] truncate text-xs text-slate-500">{v.owner_name ?? ''}</p></div> },
+    { key: 'bz', header: 'Bowzer no.', hideBelow: 'lg', render: (v) => v.bowzer_no ?? '—' },
     { key: 'cap', header: 'Capacity', sortKey: 'capacity', render: (v) => <span className="tabular-nums">{v.capacity_mt} MT</span> },
     { key: 'status', header: 'Status', sortKey: 'status', render: (v) => <div><StatusPill status={v.status} />{v.current_trip_code && <p className="mt-1 text-xs text-slate-500">{v.current_trip_code}</p>}</div> },
     { key: 'driver', header: 'Driver', hideBelow: 'lg', render: (v) => v.default_driver_name ?? <span className="text-slate-400">—</span> },

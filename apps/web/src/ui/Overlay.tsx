@@ -7,7 +7,16 @@ import { Button } from './Button';
 function useEscape(open: boolean, onClose: () => void) {
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      // Legacy muscle memory: F10 = Save / confirm (clicks the dialog's last, primary footer button).
+      if (e.key === 'F10') {
+        e.preventDefault();
+        const dlg = document.querySelector<HTMLElement>('[role="dialog"]:last-of-type');
+        const btns = dlg?.querySelectorAll<HTMLButtonElement>('[data-footer] button:not([disabled])');
+        btns?.[btns.length - 1]?.click();
+      }
+    };
     document.addEventListener('keydown', h);
     const prev = document.body.style.overflow; document.body.style.overflow = 'hidden';
     return () => { document.removeEventListener('keydown', h); document.body.style.overflow = prev; };
@@ -39,7 +48,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
           <button onClick={onClose} aria-label="Close" className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="h-5 w-5" /></button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line bg-slate-50 px-5 py-3 sm:rounded-b-2xl">{footer}</div>}
+        {footer && <div data-footer className="flex flex-wrap justify-end gap-2 border-t border-line bg-slate-50 px-5 py-3 sm:rounded-b-2xl">{footer}</div>}
       </div>
     </div>, document.body);
 }
@@ -57,7 +66,7 @@ export function Drawer({ open, onClose, title, description, children, footer, wi
           <button onClick={onClose} aria-label="Close" className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line bg-slate-50 px-5 py-3">{footer}</div>}
+        {footer && <div data-footer className="flex flex-wrap justify-end gap-2 border-t border-line bg-slate-50 px-5 py-3">{footer}</div>}
       </div>
     </div>, document.body);
 }

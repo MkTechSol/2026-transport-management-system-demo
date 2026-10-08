@@ -64,9 +64,9 @@ await step('T5 Driver profile opens with licence & trip history', async () => {
   await A.locator('tbody tr').first().click(); await A.getByRole('tab', { name: /Trip history/ }).click(); await A.getByText('Recent trips').waitFor();
 });
 await step('T6 Create a trip with the wizard (route, load, schedule, review)', async () => {
-  await A.goto(`${BASE}/trips/new`); await A.getByText('Where is the LPG going?').waitFor();
-  await A.getByLabel('Distributor').fill('Peshawar'); await A.getByRole('listbox').getByRole('option').first().click();
-  await A.getByText('Estimated route').waitFor();
+  await A.goto(`${BASE}/trips/new`); await A.getByText('What kind of trip is this?').waitFor();
+  await A.getByPlaceholder(/Search distributor/).fill('Peshawar'); await A.getByRole('listbox').getByRole('option').first().click();
+  await A.getByText('driving time').waitFor();
   await A.getByRole('button', { name: /Continue/ }).click();
   await A.getByLabel(/Planned load/).fill('8'); await A.getByRole('button', { name: /Continue/ }).click();
   await A.getByText('Review', { exact: true }).first().waitFor();
@@ -150,8 +150,10 @@ const { page: D } = await session('driver@gasman-demo.local', { width: 390, heig
 await step('T17 Driver sees mobile home, records pre-trip check and starts the assigned trip', async () => {
   await D.getByRole('heading', { name: /^Hello,/ }).waitFor();
   await D.getByText('Active trip').waitFor(); await D.screenshot({ path: `${shots}/e2e-09-driver-mobile.png` });
+  if (await D.getByRole('button', { name: 'Mark arrived' }).count()) { /* trip already in transit from an earlier run: nothing to start */ } else {
   await D.getByRole('button', { name: 'Pre-trip check' }).first().click(); await D.getByRole('button', { name: 'Confirm all checks passed' }).click(); await D.getByText('Pre-trip safety check passed.').waitFor();
   await D.getByRole('button', { name: 'Start trip' }).first().click(); await D.getByRole('dialog').getByRole('button', { name: 'Start trip' }).click(); await D.getByText('In Transit', { exact: true }).first().waitFor();
+  }
   await D.screenshot({ path: `${shots}/e2e-10-driver-started.png` });
   if (await D.getByRole('button', { name: /Cancel trip|Dispatch/ }).count()) throw new Error('driver sees dispatch/cancel actions');
   const nav = await D.getByRole('link', { name: 'Fleet', exact: true }).count(); if (nav) throw new Error('driver sees Fleet nav');

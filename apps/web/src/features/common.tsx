@@ -5,7 +5,7 @@ import { get, qs } from '../lib/api';
 import { regionLabel } from '../lib/format';
 
 /** Cached small reference lists used by dropdown filters. */
-export const usePlants = () => useQuery({ queryKey: ['/locations', 'plants'], queryFn: () => get('/locations?type=PLANT,TERMINAL,DEPOT&all=1'), staleTime: 300_000 });
+export const usePlants = () => useQuery({ queryKey: ['/locations', 'plants'], queryFn: () => get('/locations?type=PLANT,TERMINAL,DEPOT,FIELD&all=1'), staleTime: 300_000 });
 export const useVehicleOptions = () => useQuery({ queryKey: ['/vehicles', 'options'], queryFn: () => get('/vehicles?pageSize=100&sort=code&dir=asc'), staleTime: 60_000 });
 export const useDriverOptions = () => useQuery({ queryKey: ['/drivers', 'options'], queryFn: () => get('/drivers?pageSize=100&sort=name&dir=asc'), staleTime: 60_000 });
 

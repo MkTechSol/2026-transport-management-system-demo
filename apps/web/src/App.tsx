@@ -28,6 +28,12 @@ const Notifications = lazy(() => import('./pages/Notifications'));
 const Audit = lazy(() => import('./pages/Audit'));
 const Users = lazy(() => import('./pages/Users'));
 const DriverHome = lazy(() => import('./pages/DriverHome'));
+const Expenses = lazy(() => import('./pages/Expenses'));
+const Fuel = lazy(() => import('./pages/Fuel'));
+const Approvals = lazy(() => import('./pages/Approvals'));
+const RoutesPage = lazy(() => import('./pages/Routes'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Track = lazy(() => import('./pages/Track'));
 
 class Boundary extends Component<{ children: ReactNode }, { err: boolean }> {
   state = { err: false };
@@ -47,6 +53,7 @@ export default function App() {
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/track/:token" element={<Track />} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route index element={<HomeRedirect>{P(['dashboard:view'], <ControlTower />)}</HomeRedirect>} />
             <Route path="driver" element={<DriverHome />} />
@@ -67,6 +74,11 @@ export default function App() {
             <Route path="safety" element={P(['safety:view', 'safety:report'], <Safety />)} />
             <Route path="reports" element={P(['reports:view'], <Reports />)} />
             <Route path="notifications" element={P(['notifications:view'], <Notifications />)} />
+            <Route path="expenses" element={P(['expenses:view'], <Expenses />)} />
+            <Route path="fuel" element={P(['fuel:view'], <Fuel />)} />
+            <Route path="approvals" element={P(['approvals:view'], <Approvals />)} />
+            <Route path="routes" element={P(['routes:view'], <RoutesPage />)} />
+            <Route path="settings" element={P(['settings:view'], <Settings />)} />
             <Route path="audit" element={P(['audit:view'], <Audit />)} />
             <Route path="users" element={P(['users:view'], <Users />)} />
             <Route path="*" element={<EmptyState title="Page not found" description="The page you’re looking for doesn’t exist or has moved." action={<Link to="/" className="text-sm font-medium text-brand-700 hover:underline">Go to home</Link>} />} />

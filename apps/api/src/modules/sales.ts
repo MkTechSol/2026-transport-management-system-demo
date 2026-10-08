@@ -5,7 +5,7 @@ import { badRequest, notFound, unprocessable } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
-import { createInvoice, createReceipt, customerBalance, voidInvoice } from '../services/sales';
+import { createInvoice, createReceipt, customerBalance, invoiceTrip, tripInvoiceGroups, voidInvoice } from '../services/sales';
 
 export const salesRouter = Router();
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
@@ -62,19 +62,28 @@ salesRouter.post('/invoices/:id/void', requirePerm('sales:manage'), wrap(async (
 
 /** Completed trips that have freight but no invoice yet — the billing queue. */
 salesRouter.get('/billing-queue', requirePerm('sales:view'), wrap(async (_req, res) => {
-  const rows = await q(`SELECT t.id, t.code, t.trip_type, t.completed_at, t.freight_per_mt::float, COALESCE(t.delivered_mt, t.loaded_mt, t.planned_load_mt)::float AS mt, t.bill_to_id, d.name AS bill_to_name, ve.code AS vehicle_code,
+  const rows = await q(`SELECT t.id, t.code, t.trip_type, t.completed_at, t.freight_per_mt::float, COALESCE(t.delivered_mt, t.loaded_mt, t.planned_load_mt)::float AS mt, t.bill_to_id, CASE WHEN t.stop_count > 1 THEN t.stop_count || ' customers / stops' ELSE d.name END AS bill_to_name, t.stop_count, ve.code AS vehicle_code,
       (COALESCE(t.delivered_mt, t.loaded_mt, t.planned_load_mt) * t.freight_per_mt)::float AS amount
     FROM trips t LEFT JOIN distributors d ON d.id = t.bill_to_id LEFT JOIN vehicles ve ON ve.id = t.vehicle_id
     WHERE t.status = 'COMPLETED' AND t.invoice_id IS NULL AND t.freight_per_mt > 0 ORDER BY t.completed_at DESC LIMIT 100`);
   res.json({ data: rows });
 }));
 salesRouter.post('/billing-queue/:tripId/invoice', requirePerm('sales:manage'), wrap(async (req, res) => {
-  const t = await q1<any>(`SELECT t.*, o.name AS origin, COALESCE(d.name, dl.name) AS dest FROM trips t JOIN locations o ON o.id = t.origin_location_id LEFT JOIN locations dl ON dl.id = t.destination_location_id LEFT JOIN distributors d ON d.id = t.distributor_id WHERE t.id = :id`, { id: id(req, 'tripId') });
+  const tid = id(req, 'tripId');
+  const t = await q1<any>(`SELECT id, code, stop_count, invoice_id, bill_to_id, freight_per_mt FROM trips WHERE id = :id`, { id: tid });
   if (!t) throw notFound('Trip');
+  const cid = parse(z.object({ customerId: z.coerce.number().int().positive().optional() }), req.body).customerId;
+  if (t.stop_count > 1) {
+    const made = await sequelize.transaction((tx) => invoiceTrip(req.user!, req, tid, tx, cid));
+    if (!made.length) throw unprocessable('Every customer on this trip is already invoiced, or no stop has a freight rate and bill-to customer.');
+    return res.status(201).json({ invoice: made[0], invoices: made });
+  }
   if (t.invoice_id) throw unprocessable('This trip is already invoiced.');
-  const cid = parse(z.object({ customerId: z.coerce.number().int().positive().optional() }), req.body).customerId ?? t.bill_to_id;
-  if (!cid) throw badRequest('Choose the customer to bill.');
-  const inv = await createInvoice(req.user!, req, { customerId: cid, tripId: t.id, lines: [{ description: `Freight ${t.code}: ${t.origin} → ${t.dest}`, qty: Number(t.delivered_mt ?? t.loaded_mt ?? t.planned_load_mt), rate: Number(t.freight_per_mt), vehicleId: t.vehicle_id }] });
+  const customer = cid ?? t.bill_to_id;
+  if (!customer) throw badRequest('Choose the customer to bill.');
+  const g = (await tripInvoiceGroups(tid))[0];
+  if (!g) throw unprocessable('This trip has no freight rate to bill.');
+  const inv = await createInvoice(req.user!, req, { customerId: customer, tripId: tid, lines: g.lines });
   res.status(201).json({ invoice: inv });
 }));
 

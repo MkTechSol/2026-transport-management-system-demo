@@ -56,6 +56,13 @@ const REPORTS: Record<string, { title: string; group: string; perm?: 'expenses';
     const out = p.finance ? rows : rows.map(({ income, profit, ...r }: any) => r);
     return { title: 'Trip completion', subtitle: `${p.from} to ${p.to}`, columns: cols, rows: out, totals: { km: sum(out, 'km'), delivered_mt: sum(out, 'delivered_mt'), expenses: sum(out, 'expenses'), ...(p.finance ? { income: sum(out, 'income'), profit: sum(out, 'profit') } : {}) } };
   } },
+  'delivery-points': { title: 'Delivery points (POD register)', group: 'Trip vouchers', run: async (p) => {
+    const rows = await q(`SELECT ${D('t.scheduled_departure')} AS date, t.code, s.seq, t.stop_count, l.name AS place, COALESCE(c.name, '') AS customer, v.code AS vehicle, s.status,
+        s.planned_mt::float AS planned_mt, COALESCE(s.delivered_mt, 0)::float AS delivered_mt, COALESCE(s.received_by, '') AS received_by, COALESCE(s.delivery_note_no, '') AS dn_no
+      FROM trip_stops s JOIN trips t ON t.id = s.trip_id JOIN locations l ON l.id = s.location_id LEFT JOIN distributors c ON c.id = s.distributor_id LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      WHERE t.stop_count > 1 AND t.status <> 'CANCELLED' AND ${D('t.scheduled_departure')} BETWEEN :from AND :to ${vf(p)} ${df(p)} ORDER BY t.scheduled_departure DESC, t.id, s.seq`, p);
+    return { title: 'Delivery points (POD register)', subtitle: `${p.from} to ${p.to} · one row per drop on multi-stop trips`, columns: [{ key: 'date', label: 'Date', type: 'date' }, { key: 'code', label: 'Trip' }, { key: 'seq', label: 'Stop', type: 'num' }, { key: 'place', label: 'Delivery point' }, { key: 'customer', label: 'Customer' }, { key: 'vehicle', label: 'Bowzer' }, { key: 'status', label: 'Status' }, { key: 'planned_mt', label: 'Planned MT', type: 'num' }, { key: 'delivered_mt', label: 'Delivered MT', type: 'num' }, { key: 'received_by', label: 'Received by' }, { key: 'dn_no', label: 'DN no.' }], rows, totals: { planned_mt: sum(rows, 'planned_mt'), delivered_mt: sum(rows, 'delivered_mt') } };
+  } },
   'driver-summary': { title: 'Driver trip summary', group: 'Summaries', run: async (p) => {
     const rows = await q(`SELECT dr.employee_id AS code, dr.full_name AS driver, count(*) FILTER (WHERE t.status = 'COMPLETED')::int AS trips, COALESCE(sum(t.odometer_end - t.odometer_start) FILTER (WHERE t.status = 'COMPLETED'), 0)::int AS km, COALESCE(sum(t.delivered_mt) FILTER (WHERE t.status = 'COMPLETED'), 0)::float AS mt,
         COALESCE((SELECT sum(x.nights) FROM trip_expenses x WHERE x.driver_id = dr.id AND x.category = 'TOUR_STAY' AND x.incurred_on BETWEEN :from AND :to), 0)::int AS nights_away, COALESCE(round(avg(t.delay_minutes) FILTER (WHERE t.status = 'COMPLETED')), 0)::int AS avg_delay_min

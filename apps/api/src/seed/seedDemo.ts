@@ -13,6 +13,7 @@ import { demoFreightPerMt } from '../lib/geo';
 import { PARTNER_OWNERS } from './data';
 import { seedSettings } from '../services/settings';
 import { seedFinance } from './financeSeed';
+import { seedStops } from './multiDrop';
 import { seedInventory } from './inventorySeed';
 import { seedHr } from './hrSeed';
 
@@ -33,7 +34,7 @@ export async function truncateAll() {
     trip_expenses, fuel_entries, approvals, approval_rules, settings,
     voucher_allocations, voucher_lines, vouchers, voucher_counters, account_balances, party_balances, sales_invoice_lines, sales_invoices, sales_order_lines, sales_orders, banks, vendors,
     stock_movements, stock_balances, stock_doc_lines, stock_docs, tyre_events, tyres, purchase_order_lines, purchase_orders, rfq_quote_lines, rfq_quotes, purchase_request_lines, purchase_requests, items, item_subcategories, item_categories, brands, warehouses, payroll_lines, payroll_runs, leave_requests, attendance, employees, departments, exception_acks,
-    trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
+    trip_stops, trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
   await sequelize.query(`DELETE FROM accounts WHERE system_key IS NULL AND code LIKE '1120-%'; ALTER SEQUENCE invoice_no_seq RESTART; ALTER SEQUENCE sales_order_no_seq RESTART; ALTER SEQUENCE stock_doc_seq RESTART; ALTER SEQUENCE pr_no_seq RESTART; ALTER SEQUENCE po_no_seq RESTART;`);
 }
 
@@ -544,6 +545,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     SELECT setval(pg_get_serial_sequence('approval_rules','id'), (SELECT max(id) FROM approval_rules));
     SELECT setval('trip_code_seq', ${trips.length});
     SELECT setval('incident_code_seq', ${incidents.length});`);
+  await seedStops({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
   await seedFinance({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
   await sequelize.query(`UPDATE fiscal_years SET status = 'OPEN'`);
   await seedInventory({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });

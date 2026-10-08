@@ -6,7 +6,8 @@ import {
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { AppError, conflict, forbidden, notFound, unprocessable, badRequest } from '../lib/errors';
 import crypto from 'node:crypto';
-import { buildSyntheticRoute, demoFreightPerMt } from '../lib/geo';
+import { buildSyntheticRoute, demoFreightPerMt, haversineKm, LatLng } from '../lib/geo';
+import { addEvent, assertEarlierStopsResolved, deliveredSoFar, listStops, recomputeTotals } from './tripStops';
 import { can, LOADING_LOCATION_TYPES } from '@gasman/shared';
 import { postHooks } from './hooks';
 import { setting } from './settings';
@@ -15,6 +16,8 @@ import { config } from '../config';
 import { audit } from './audit';
 import { AUDIENCE, notify } from './notify';
 import type { AuthUser } from '../middleware/auth';
+
+export { addEvent };
 
 export const fmtDate = (d: string | Date) =>
   new Date(typeof d === 'string' ? d.slice(0, 10) + 'T00:00:00Z' : d).toLocaleDateString('en-GB', {
@@ -28,7 +31,9 @@ export const TRIP_LIST_SELECT = `
   t.vehicle_id, v.code AS vehicle_code, v.registration_no, t.driver_id, d.full_name AS driver_name,
   t.origin_location_id, o.name AS origin_name, o.code AS origin_code,
   t.destination_location_id, dl.name AS destination_name, dl.city AS destination_city, dl.region AS destination_region,
-  t.distributor_id, di.name AS distributor_name`;
+  t.distributor_id, di.name AS distributor_name, t.stop_count,
+  (SELECT string_agg(sl.name, ' › ' ORDER BY ss.seq) FROM trip_stops ss JOIN locations sl ON sl.id = ss.location_id WHERE ss.trip_id = t.id AND t.stop_count > 1) AS stops_label,
+  (SELECT count(*)::int FROM trip_stops ss WHERE ss.trip_id = t.id AND ss.status IN ('DELIVERED','SKIPPED')) AS stops_done`;
 export const TRIP_LIST_FROM = `
   FROM trips t
   JOIN locations o  ON o.id = t.origin_location_id
@@ -40,7 +45,7 @@ export const TRIP_LIST_FROM = `
 // ---------- Routes ----------
 
 export async function getOrCreateRoute(originId: number, destId: number, tx?: any) {
-  const existing = await q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx);
+  const existing = await q1<any>("SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d AND kind = 'DIRECT'", { o: originId, d: destId }, tx);
   if (existing) return existing;
   const o = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: originId }, tx);
   const d = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: destId }, tx);
@@ -49,11 +54,103 @@ export async function getOrCreateRoute(originId: number, destId: number, tx?: an
   return q1<any>(
     `INSERT INTO routes (code, name, origin_location_id, destination_location_id, distance_km, est_duration_min, path, checkpoints, freight_per_mt)
      VALUES (:code, :name, :o, :d, :km, :min, :path, :cps, :fr)
-     ON CONFLICT (origin_location_id, destination_location_id) DO UPDATE SET code = routes.code
+     ON CONFLICT (origin_location_id, destination_location_id) WHERE kind = 'DIRECT' DO UPDATE SET code = routes.code
      RETURNING *`,
-    { code: `RT-${o.code}-${d.code}`.slice(0, 40), name: `${o.name} – ${d.name}`.slice(0, 150), o: originId, d: destId, km: r.distanceKm, min: r.estDurationMin, path: JSON.stringify(r.path), cps: JSON.stringify(r.checkpoints), fr: demoFreightPerMt(r.distanceKm) },
+    { code: `RT-${o.code}-${d.code}`.length <= 40 ? `RT-${o.code}-${d.code}` : `RT-${originId}-${destId}`, name: `${o.name} – ${d.name}`.slice(0, 150), o: originId, d: destId, km: r.distanceKm, min: r.estDurationMin, path: JSON.stringify(r.path), cps: JSON.stringify(r.checkpoints), fr: demoFreightPerMt(r.distanceKm) },
     tx,
-  ).then((rows) => rows ?? q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx));
+  ).then((rows) => rows ?? q1<any>("SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d AND kind = 'DIRECT'", { o: originId, d: destId }, tx));
+}
+
+// ---------- Multi-drop planning ----------
+
+export interface StopInput { locationId?: number; distributorId?: number; plannedMt: number; freightPerMt?: number; billToId?: number }
+export const MAX_STOPS = 8;
+
+const arcKm = (path: LatLng[]) => { let t = 0; for (let i = 1; i < path.length; i++) t += haversineKm(path[i - 1], path[i]); return t; };
+
+/** Composite route origin -> s1 -> s2 ... built from the direct legs. Cached by the location chain. */
+async function getOrCreateMultiRoute(originId: number, locIds: number[], tx: any) {
+  const chain = [originId, ...locIds];
+  const legs: any[] = [];
+  for (let i = 0; i < chain.length - 1; i++) legs.push(await getOrCreateRoute(chain[i], chain[i + 1], tx));
+  const dwell = Number(await setting<number>('trip.stopDwellMin'));
+  const legArc = legs.map((l) => arcKm(l.path as LatLng[]));
+  const totalArc = legArc.reduce((a, b) => a + b, 0) || 1;
+  const path: LatLng[] = []; const checkpoints: { name: string; at: number }[] = []; const fracs: number[] = []; const driveMin: number[] = [];
+  let cum = 0; let cumMin = 0;
+  legs.forEach((l, i) => {
+    const lp = l.path as LatLng[];
+    path.push(...(i === 0 ? lp : lp.slice(1)));
+    for (const cp of (l.checkpoints ?? []) as { name: string; at: number }[]) if (!checkpoints.some((c) => c.name === cp.name)) checkpoints.push({ name: cp.name, at: Math.round(((cum + cp.at * legArc[i]) / totalArc) * 1000) / 1000 });
+    cum += legArc[i]; cumMin += Number(l.est_duration_min);
+    fracs.push(Math.min(1, cum / totalArc)); driveMin.push(cumMin);
+  });
+  fracs[fracs.length - 1] = 1;
+  const code = `RT-M-${crypto.createHash('sha1').update(chain.join('-')).digest('hex').slice(0, 14)}`;
+  const names = await q<any>('SELECT id, name FROM locations WHERE id IN (:ids)', { ids: chain }, tx);
+  const nm = new Map(names.map((n: any) => [n.id, n.name]));
+  const distance = Math.round(legs.reduce((a, l) => a + Number(l.distance_km), 0) * 10) / 10;
+  const total = cumMin + dwell * (locIds.length - 1);
+  const route = (await q1<any>(
+    `INSERT INTO routes (code, name, kind, origin_location_id, destination_location_id, distance_km, est_duration_min, path, checkpoints, freight_per_mt)
+     VALUES (:code, :name, 'MULTI', :o, :d, :km, :min, :path, :cps, 0) ON CONFLICT (code) DO NOTHING RETURNING *`,
+    { code, name: chain.map((id) => nm.get(id)).join(' › ').slice(0, 150), o: originId, d: locIds[locIds.length - 1], km: distance, min: total, path: JSON.stringify(path), cps: JSON.stringify(checkpoints) }, tx,
+  )) ?? (await q1<any>('SELECT * FROM routes WHERE code = :c', { c: code }, tx));
+  return { route, fracs, driveMin, dwell };
+}
+
+export interface PlannedStops {
+  route: any; destId: number; distributorId: number | null; load: number; rate: number; billToId: number | null; durationMin: number;
+  rows: { seq: number; locationId: number; distributorId: number | null; plannedMt: number; routeFrac: number; etaMin: number; freightPerMt: number; billToId: number | null }[];
+}
+
+/** Validates and resolves a stop list into route, ETAs, rates and trip-level mirrors. Pure planning: writes nothing. */
+export async function planStops(tx: any, originId: number, stops: StopInput[], opts: { requireActiveDistributor: boolean }): Promise<PlannedStops> {
+  if (!stops.length) throw badRequest('Choose a destination or a distributor.', { fields: { destinationLocationId: 'Required' } });
+  if (stops.length > MAX_STOPS) throw badRequest(`A trip can have at most ${MAX_STOPS} delivery stops.`);
+  const resolved: { locationId: number; distributorId: number | null; plannedMt: number; freightPerMt?: number; billToId: number | null }[] = [];
+  for (const [i, st] of stops.entries()) {
+    let locationId = st.locationId; let distributorId: number | null = st.distributorId ?? null;
+    if (distributorId) {
+      const dist = await q1<any>('SELECT id, location_id, status, name FROM distributors WHERE id = :id', { id: distributorId }, tx);
+      if (!dist) throw notFound('Distributor');
+      if (opts.requireActiveDistributor && dist.status !== 'ACTIVE') throw unprocessable(`Distributor ${dist.name} is not active, so new trips cannot be created for it.`);
+      locationId = dist.location_id;
+    }
+    if (!locationId) throw badRequest(`Stop ${i + 1}: choose a destination or a distributor.`, { fields: { destinationLocationId: 'Required' } });
+    if (!(st.plannedMt > 0)) throw badRequest(`Stop ${i + 1}: enter the quantity to deliver.`);
+    resolved.push({ locationId, distributorId, plannedMt: st.plannedMt, freightPerMt: st.freightPerMt, billToId: st.billToId ?? distributorId });
+  }
+  const ids = resolved.map((r) => r.locationId);
+  if (ids.includes(originId)) throw badRequest('Origin and destination must be different.', { fields: { destinationLocationId: 'Must differ from origin' } });
+  if (new Set(ids).size !== ids.length) throw badRequest('The same location cannot appear twice on one trip.');
+  const load = Math.round(resolved.reduce((a, r) => a + r.plannedMt, 0) * 100) / 100;
+  if (load > 60) throw badRequest('Total planned load cannot exceed 60 MT.', { fields: { plannedLoadMt: 'Too large' } });
+
+  let route: any; let fracs = [1]; let etaMin: number[]; let durationMin: number;
+  if (resolved.length === 1) {
+    route = await getOrCreateRoute(originId, ids[0], tx);
+    etaMin = [route.est_duration_min]; durationMin = route.est_duration_min;
+  } else {
+    const m = await getOrCreateMultiRoute(originId, ids, tx);
+    route = m.route; fracs = m.fracs; durationMin = route.est_duration_min;
+    etaMin = m.driveMin.map((d, i) => d + m.dwell * i);
+  }
+  const rows: PlannedStops['rows'] = [];
+  for (const [i, r] of resolved.entries()) {
+    const rate = r.freightPerMt ?? (resolved.length === 1 ? Number(route.freight_per_mt ?? 0) : Number((await getOrCreateRoute(originId, r.locationId, tx)).freight_per_mt ?? 0));
+    rows.push({ seq: i + 1, locationId: r.locationId, distributorId: r.distributorId, plannedMt: r.plannedMt, routeFrac: fracs[i], etaMin: etaMin[i], freightPerMt: rate, billToId: r.billToId });
+  }
+  const last = rows[rows.length - 1];
+  const rate = Math.round((rows.reduce((a, r) => a + r.plannedMt * r.freightPerMt, 0) / load) * 100) / 100;
+  return { route, destId: last.locationId, distributorId: last.distributorId, load, rate, billToId: last.billToId ?? rows.find((r) => r.billToId)?.billToId ?? null, durationMin, rows };
+}
+
+async function writeStops(tx: any, tripId: number, dep: Date, plan: PlannedStops) {
+  await exec('DELETE FROM trip_stops WHERE trip_id = :id', { id: tripId }, tx);
+  for (const r of plan.rows)
+    await exec(`INSERT INTO trip_stops (trip_id, seq, location_id, distributor_id, planned_mt, route_frac, eta_at, freight_per_mt, bill_to_id) VALUES (:t, :seq, :loc, :dist, :mt, :frac, :eta, :fr, :bill)`,
+      { t: tripId, seq: r.seq, loc: r.locationId, dist: r.distributorId, mt: r.plannedMt, frac: r.routeFrac, eta: new Date(dep.getTime() + r.etaMin * 60_000).toISOString(), fr: r.freightPerMt, bill: r.billToId }, tx);
 }
 
 // ---------- Assignment validation (single source of truth, used by validation, candidates & dispatch) ----------
@@ -218,8 +315,10 @@ export interface CreateTripInput {
   originLocationId: number;
   destinationLocationId?: number;
   distributorId?: number;
+  /** Multi-drop: ordered delivery stops (origin -> stops[0] -> stops[1] ...). When present it replaces destinationLocationId / distributorId / plannedLoadMt. */
+  stops?: StopInput[];
   lpgSource: 'LOCAL' | 'IMPORTED';
-  plannedLoadMt: number;
+  plannedLoadMt?: number;
   scheduledDeparture: string;
   plannedArrival?: string;
   priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
@@ -231,40 +330,41 @@ export interface CreateTripInput {
   billToId?: number;
 }
 
+/** Single-destination fields (legacy API) become a one-stop list; an explicit `stops` array wins. */
+function stopsFromInput(i: Partial<CreateTripInput>, fallbackLoad?: number): StopInput[] {
+  if (i.stops?.length) return i.stops;
+  const load = i.plannedLoadMt ?? fallbackLoad;
+  if (!load) throw badRequest('Enter the planned load.', { fields: { plannedLoadMt: 'Required' } });
+  return [{ locationId: i.destinationLocationId, distributorId: i.distributorId, plannedMt: load, freightPerMt: i.freightPerMt, billToId: i.billToId }];
+}
+
 export async function createTrip(user: AuthUser, req: Request, input: CreateTripInput) {
   return sequelize.transaction(async (tx) => {
-    let destId = input.destinationLocationId;
-    let distributorId = input.distributorId ?? null;
-    if (distributorId) {
-      const dist = await q1<any>('SELECT id, location_id, status, name FROM distributors WHERE id = :id', { id: distributorId }, tx);
-      if (!dist) throw notFound('Distributor');
-      if (dist.status !== 'ACTIVE') throw unprocessable(`Distributor ${dist.name} is not active, so new trips cannot be created for it.`);
-      destId = dist.location_id;
-    }
-    if (!destId) throw badRequest('Choose a destination or a distributor.', { fields: { destinationLocationId: 'Required' } });
-    if (destId === input.originLocationId) throw badRequest('Origin and destination must be different.', { fields: { destinationLocationId: 'Must differ from origin' } });
     const origin = await q1<any>("SELECT id, name, type FROM locations WHERE id = :id AND status = 'ACTIVE'", { id: input.originLocationId }, tx);
     if (!origin) throw notFound('Origin location');
     if (!(LOADING_LOCATION_TYPES as readonly string[]).includes(origin.type)) throw badRequest('Trips must start from a plant, terminal, depot or gas field (uplift point).', { fields: { originLocationId: 'Not a loading point' } });
     const tripType = origin.type === 'FIELD' ? 'UPLIFTING' : 'DELIVERY';
-    const route = await getOrCreateRoute(input.originLocationId, destId, tx);
+    const stops = stopsFromInput(input);
+    if (tripType === 'UPLIFTING' && stops.length > 1) throw badRequest('Uplifting trips have a single destination (the receiving plant).');
+    const plan = await planStops(tx, input.originLocationId, stops, { requireActiveDistributor: true });
     const dep = new Date(input.scheduledDeparture);
-    const arr = input.plannedArrival ? new Date(input.plannedArrival) : new Date(dep.getTime() + route.est_duration_min * 60_000);
+    const arr = input.plannedArrival ? new Date(input.plannedArrival) : new Date(dep.getTime() + plan.durationMin * 60_000);
     if (arr <= dep) throw badRequest('Planned arrival must be after departure.', { fields: { plannedArrival: 'Must be after departure' } });
 
     const [{ n }] = await q<any>("SELECT nextval('trip_code_seq')::int AS n", {}, tx);
     const code = `TRP-${dep.getUTCFullYear()}-${String(n).padStart(4, '0')}`;
     const row = await q1<any>(
       `INSERT INTO trips (code, status, priority, origin_location_id, destination_location_id, distributor_id, route_id, lpg_source,
-          planned_load_mt, scheduled_departure, planned_arrival, notes, created_by, cur_lat, cur_lng, trip_type, freight_per_mt, bill_to_id, public_token)
-       SELECT :code, 'DRAFT', :prio, :o, :d, :dist, :rid, :src, :load, :dep, :arr, :notes, :uid, l.lat, l.lng, :tt, :fr, :bill, :tok FROM locations l WHERE l.id = :o
+          planned_load_mt, scheduled_departure, planned_arrival, notes, created_by, cur_lat, cur_lng, trip_type, freight_per_mt, bill_to_id, public_token, stop_count)
+       SELECT :code, 'DRAFT', :prio, :o, :d, :dist, :rid, :src, :load, :dep, :arr, :notes, :uid, l.lat, l.lng, :tt, :fr, :bill, :tok, :sc FROM locations l WHERE l.id = :o
        RETURNING *`,
-      { code, prio: input.priority, o: input.originLocationId, d: destId, dist: distributorId, rid: route.id, src: input.lpgSource, load: input.plannedLoadMt, dep: dep.toISOString(), arr: arr.toISOString(), notes: input.notes ?? null, uid: user.id,
-        tt: tripType, fr: input.freightPerMt ?? route.freight_per_mt ?? 0, bill: input.billToId ?? distributorId, tok: crypto.randomBytes(18).toString('base64url') },
+      { code, prio: input.priority, o: input.originLocationId, d: plan.destId, dist: plan.distributorId, rid: plan.route.id, src: input.lpgSource, load: plan.load, dep: dep.toISOString(), arr: arr.toISOString(), notes: input.notes ?? null, uid: user.id,
+        tt: tripType, fr: plan.rate, bill: plan.billToId, tok: crypto.randomBytes(18).toString('base64url'), sc: plan.rows.length },
       tx,
     );
-    await addEvent(tx, row.id, { type: 'STATUS_CHANGE', toStatus: 'DRAFT', message: `Trip ${code} created`, actor: user.id });
-    await audit(req, { action: 'CREATE', entityType: 'TRIP', entityId: row.id, entityLabel: code, tx });
+    await writeStops(tx, row.id, dep, plan);
+    await addEvent(tx, row.id, { type: 'STATUS_CHANGE', toStatus: 'DRAFT', message: plan.rows.length > 1 ? `Trip ${code} created with ${plan.rows.length} delivery stops` : `Trip ${code} created`, actor: user.id });
+    await audit(req, { action: 'CREATE', entityType: 'TRIP', entityId: row.id, entityLabel: code, meta: plan.rows.length > 1 ? { stops: plan.rows.length } : undefined, tx });
     if (input.submit || input.vehicleId) await doTransition(tx, user, req, row, 'PLANNED', {});
     if (input.vehicleId && input.driverId) await doAssign(tx, user, req, row.id, input.vehicleId, input.driverId);
     else if (input.vehicleId || input.driverId) throw badRequest('Select both a vehicle and a driver, or neither.');
@@ -277,33 +377,50 @@ export async function updateTrip(user: AuthUser, req: Request, id: number, patch
     const t = await lockTrip(tx, id);
     if (!['DRAFT', 'PLANNED', 'ASSIGNED'].includes(t.status))
       throw conflict(`Trip ${t.code} is ${TRIP_STATUS_LABELS[t.status as TripStatus].toLowerCase()} and can no longer be edited.`);
+    const routeChange = !!(patch.stops || patch.destinationLocationId || patch.distributorId || patch.originLocationId);
+    if (routeChange && t.status === 'ASSIGNED') throw conflict('Unassign the vehicle and driver before changing the route.');
     const sets: string[] = [];
     const r: Record<string, unknown> = { id };
+    // On a multi-drop trip the totals / rates are derived from the stops, so the trip-level fields are not patched directly.
+    const multi = t.stop_count > 1 && !patch.stops;
     const map: [keyof CreateTripInput, string, (v: any) => unknown][] = [
-      ['plannedLoadMt', 'planned_load_mt', (v) => v], ['priority', 'priority', (v) => v], ['notes', 'notes', (v) => v],
-      ['lpgSource', 'lpg_source', (v) => v], ['freightPerMt', 'freight_per_mt', (v) => v], ['billToId', 'bill_to_id', (v) => v],
-      ['scheduledDeparture', 'scheduled_departure', (v) => new Date(v).toISOString()],
-      ['plannedArrival', 'planned_arrival', (v) => new Date(v).toISOString()],
+      ['priority', 'priority', (v) => v], ['notes', 'notes', (v) => v], ['lpgSource', 'lpg_source', (v) => v],
+      ['scheduledDeparture', 'scheduled_departure', (v) => new Date(v).toISOString()], ['plannedArrival', 'planned_arrival', (v) => new Date(v).toISOString()],
+      ...(multi ? [] : [['plannedLoadMt', 'planned_load_mt', (v: any) => v], ['freightPerMt', 'freight_per_mt', (v: any) => v], ['billToId', 'bill_to_id', (v: any) => v]] as [keyof CreateTripInput, string, (v: any) => unknown][]),
     ];
     for (const [k, col, f] of map) if (patch[k] !== undefined) { sets.push(`${col} = :${col}`); r[col] = f(patch[k]); }
-    if (patch.destinationLocationId || patch.distributorId || patch.originLocationId) {
-      if (t.status === 'ASSIGNED') throw conflict('Unassign the vehicle and driver before changing the route.');
-      let dest = patch.destinationLocationId ?? t.destination_location_id;
-      let distributorId = t.distributor_id;
-      if (patch.distributorId) {
-        const d = await q1<any>('SELECT location_id FROM distributors WHERE id = :id', { id: patch.distributorId }, tx);
-        if (!d) throw notFound('Distributor');
-        dest = d.location_id; distributorId = patch.distributorId;
-      } else if (patch.destinationLocationId) distributorId = null;
+    if (multi && (patch.plannedLoadMt !== undefined || patch.freightPerMt !== undefined)) throw badRequest('This trip has several stops — edit the quantity and rate on each stop instead.');
+    if (sets.length) { sets.push('updated_at = now()'); await exec(`UPDATE trips SET ${sets.join(', ')} WHERE id = :id`, r, tx); }
+    let updated = await q1<any>('SELECT * FROM trips WHERE id = :id', { id }, tx);
+
+    if (routeChange || patch.plannedLoadMt !== undefined || patch.freightPerMt !== undefined || patch.billToId !== undefined || patch.scheduledDeparture) {
       const origin = patch.originLocationId ?? t.origin_location_id;
-      if (origin === dest) throw badRequest('Origin and destination must be different.');
-      const route = await getOrCreateRoute(origin, dest, tx);
-      sets.push('origin_location_id = :o', 'destination_location_id = :d', 'distributor_id = :dist', 'route_id = :rid');
-      Object.assign(r, { o: origin, d: dest, dist: distributorId, rid: route.id });
+      let stops: StopInput[];
+      if (patch.stops || patch.destinationLocationId || patch.distributorId) {
+        stops = stopsFromInput({ ...patch, plannedLoadMt: patch.plannedLoadMt ?? Number(updated.planned_load_mt), freightPerMt: patch.freightPerMt ?? Number(updated.freight_per_mt), billToId: patch.billToId ?? updated.bill_to_id ?? undefined });
+      } else {
+        const cur = await listStops(id, tx);
+        stops = cur.map((s: any) => ({ locationId: s.location_id, distributorId: s.distributor_id ?? undefined, plannedMt: Number(s.planned_mt), freightPerMt: Number(s.freight_per_mt), billToId: s.bill_to_id ?? undefined }));
+        if (stops.length === 1) {
+          if (patch.plannedLoadMt !== undefined) stops[0].plannedMt = patch.plannedLoadMt;
+          if (patch.freightPerMt !== undefined) stops[0].freightPerMt = patch.freightPerMt;
+          if (patch.billToId !== undefined) stops[0].billToId = patch.billToId;
+        }
+      }
+      if (patch.originLocationId) {
+        const o = await q1<any>("SELECT type FROM locations WHERE id = :id AND status = 'ACTIVE'", { id: origin }, tx);
+        if (!o) throw notFound('Origin location');
+        if (!(LOADING_LOCATION_TYPES as readonly string[]).includes(o.type)) throw badRequest('Trips must start from a plant, terminal, depot or gas field (uplift point).');
+      }
+      if (t.trip_type === 'UPLIFTING' && stops.length > 1) throw badRequest('Uplifting trips have a single destination (the receiving plant).');
+      const plan = await planStops(tx, origin, stops, { requireActiveDistributor: !!(patch.stops || patch.distributorId) });
+      const dep = new Date(updated.scheduled_departure);
+      const arr = patch.plannedArrival ? new Date(patch.plannedArrival) : routeChange || patch.scheduledDeparture ? new Date(dep.getTime() + plan.durationMin * 60_000) : new Date(updated.planned_arrival);
+      await writeStops(tx, id, dep, plan);
+      updated = await q1<any>(
+        `UPDATE trips SET origin_location_id = :o, destination_location_id = :d, distributor_id = :dist, route_id = :rid, planned_load_mt = :load, freight_per_mt = :fr, bill_to_id = :bill, planned_arrival = :arr, stop_count = :sc, updated_at = now() WHERE id = :id RETURNING *`,
+        { id, o: origin, d: plan.destId, dist: plan.distributorId, rid: plan.route.id, load: plan.load, fr: plan.rate, bill: plan.billToId, arr: arr.toISOString(), sc: plan.rows.length }, tx);
     }
-    if (!sets.length) return id;
-    sets.push('updated_at = now()');
-    const updated = await q1<any>(`UPDATE trips SET ${sets.join(', ')} WHERE id = :id RETURNING *`, r, tx);
     if (new Date(updated.planned_arrival) <= new Date(updated.scheduled_departure)) throw badRequest('Planned arrival must be after departure.');
     if (updated.vehicle_id && updated.driver_id) {
       const v = await validateAssignment(updated, updated.vehicle_id, updated.driver_id, tx);
@@ -344,20 +461,6 @@ async function doAssign(tx: any, user: AuthUser, req: Request, tripId: number, v
 
 export async function assignTrip(user: AuthUser, req: Request, tripId: number, vehicleId: number, driverId: number) {
   await sequelize.transaction((tx) => doAssign(tx, user, req, tripId, vehicleId, driverId));
-}
-
-// ---------- Events ----------
-
-export async function addEvent(
-  tx: any, tripId: number,
-  e: { type: string; message: string; fromStatus?: string; toStatus?: string; actor?: number | null; lat?: number; lng?: number; clientEventId?: string; at?: Date },
-) {
-  await exec(
-    `INSERT INTO trip_events (trip_id, type, from_status, to_status, message, actor_user_id, lat, lng, client_event_id, occurred_at)
-     VALUES (:t, :type, :f, :to, :m, :a, :lat, :lng, :cid, COALESCE(:at, now()))`,
-    { t: tripId, type: e.type, f: e.fromStatus ?? null, to: e.toStatus ?? null, m: e.message, a: e.actor ?? null, lat: e.lat ?? null, lng: e.lng ?? null, cid: e.clientEventId ?? null, at: e.at?.toISOString() ?? null },
-    tx,
-  );
 }
 
 // ---------- Status transitions ----------
@@ -447,6 +550,7 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
     msg = `Departed with ${loaded} MT LPG`;
   }
   if (to === 'ARRIVED') {
+    await assertEarlierStopsResolved(tx, t);
     const dest = await q1<any>('SELECT lat, lng, name FROM locations WHERE id = :id', { id: t.destination_location_id }, tx);
     const late = Math.max(0, Math.round((Date.now() - new Date(t.planned_arrival).getTime()) / 60_000));
     sets.push('progress_pct = 100', 'cur_lat = :lat', 'cur_lng = :lng', 'cur_speed_kmh = 0', 'eta_at = now()', 'delay_minutes = :late', 'last_position_at = now()');
@@ -454,13 +558,15 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
     msg = `Arrived at ${dest.name}${late > 15 ? ` (${late} min late)` : ''}`;
   }
   if (to === 'DELIVERED') {
+    await assertEarlierStopsResolved(tx, t);
     const loaded = Number(t.loaded_mt ?? t.planned_load_mt);
+    const earlier = t.stop_count > 1 ? await deliveredSoFar(tx, t.id) : 0;
     if (!p.deliveredMt || p.deliveredMt <= 0) throw badRequest('Enter the delivered quantity.', { fields: { deliveredMt: 'Required' } });
-    if (p.deliveredMt > loaded + 0.5) throw unprocessable(`Delivered quantity (${p.deliveredMt} MT) cannot exceed the loaded quantity (${loaded} MT).`);
+    if (p.deliveredMt > loaded - earlier + 0.5) throw unprocessable(earlier ? `Only ${(loaded - earlier).toFixed(2)} MT is left on board for the final stop (${earlier.toFixed(2)} MT already delivered at earlier stops).` : `Delivered quantity (${p.deliveredMt} MT) cannot exceed the loaded quantity (${loaded} MT).`);
     if (!p.receivedBy?.trim()) throw badRequest('Enter who received the delivery.', { fields: { receivedBy: 'Required' } });
     sets.push('delivered_mt = :dmt', 'received_by = :rb', 'delivery_note_no = :dn', 'pod_notes = :pn');
     Object.assign(r, { dmt: p.deliveredMt, rb: p.receivedBy, dn: p.deliveryNoteNo ?? null, pn: p.podNotes ?? null });
-    msg = `Delivered ${p.deliveredMt} MT, received by ${p.receivedBy}`;
+    msg = t.stop_count > 1 ? `Delivered ${p.deliveredMt} MT at final stop ${t.stop_count}, received by ${p.receivedBy}` : `Delivered ${p.deliveredMt} MT, received by ${p.receivedBy}`;
   }
   if (to === 'RETURNING') { sets.push('progress_pct = 0', 'cur_speed_kmh = 0'); msg = 'Vehicle started return to plant'; }
   if (to === 'COMPLETED') {
@@ -478,6 +584,14 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
   if (p.note) msg += ` — ${p.note}`;
 
   await exec(`UPDATE trips SET ${sets.join(', ')} WHERE id = :id`, r, tx);
+
+  // The final stop mirrors the trip's own arrival / delivery steps (a normal trip has exactly one stop).
+  if (to === 'ARRIVED') await exec(`UPDATE trip_stops SET status = 'ARRIVED', arrived_at = now() WHERE trip_id = :id AND seq = :last`, { id: t.id, last: t.stop_count }, tx);
+  if (to === 'DELIVERED') {
+    await exec(`UPDATE trip_stops SET status = 'DELIVERED', delivered_mt = :dmt, delivered_at = now(), arrived_at = COALESCE(arrived_at, now()), received_by = :rb, delivery_note_no = :dn, pod_notes = :pn WHERE trip_id = :id AND seq = :last`,
+      { id: t.id, last: t.stop_count, dmt: p.deliveredMt, rb: p.receivedBy, dn: p.deliveryNoteNo ?? null, pn: p.podNotes ?? null }, tx);
+    if (t.stop_count > 1) await recomputeTotals(tx, t.id);
+  }
 
   // ----- side-effects on vehicle / driver -----
   const busy = ['DISPATCHED'];
@@ -553,15 +667,16 @@ export async function getTripDetail(id: number, user: AuthUser) {
               FROM safety_checks c LEFT JOIN users u ON u.id = c.completed_by WHERE c.trip_id = :id ORDER BY c.completed_at DESC`, { id }),
   ]);
   const canFin = can(user.role, 'finance:view');
+  const stops = await listStops(id);
   const [expenses, fuel, econ] = await Promise.all([
     q<any>(`SELECT x.id, x.category, x.amount, x.nights, x.description, x.receipt_no, x.incurred_on, x.status, x.decision_note, x.created_at, u.full_name AS submitted_by_name
               FROM trip_expenses x LEFT JOIN users u ON u.id = x.submitted_by WHERE x.trip_id = :id ORDER BY x.created_at DESC`, { id }),
     q<any>(`SELECT f.id, f.station, f.fueled_at, f.litres, f.rate_per_l, f.amount, f.odometer_km, f.kmpl, f.status, f.flag_reason FROM fuel_entries f WHERE f.trip_id = :id ORDER BY f.fueled_at DESC`, { id }),
     tripEconomics(id),
   ]);
-  if (!canFin) { delete t.freight_per_mt; delete t.bill_to_id; }
+  if (!canFin) { delete t.freight_per_mt; delete t.bill_to_id; for (const s of stops) { delete s.freight_per_mt; delete s.bill_to_id; delete s.bill_to_name; } }
   const economics = canFin ? econ : { expensesApproved: econ.expensesApproved, expensesPending: econ.expensesPending, km: econ.km };
-  return { trip: t, events, checks, expenses, fuel, economics, actions: await tripActions(t, user) };
+  return { trip: t, stops, events, checks, expenses, fuel, economics, actions: await tripActions(t, user) };
 }
 
 export { AppError };

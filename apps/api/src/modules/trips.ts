@@ -1,21 +1,32 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { LPG_SOURCES, PRIORITIES, TRIP_STATUSES, TripStatus } from '@gasman/shared';
-import { q, q1, exec } from '../db/sequelize';
+import { q, q1, exec, sequelize } from '../db/sequelize';
+import { can } from '@gasman/shared';
 import { forbidden, notFound, unprocessable } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
-import { addEvent, assignTrip, getOrCreateRoute, candidates, createTrip, getTripDetail, TRIP_LIST_FROM, TRIP_LIST_SELECT, transitionTrip, updateTrip, validateAssignment } from '../services/trips';
+import { stopAction } from '../services/tripStops';
+import { addEvent, assignTrip, getOrCreateRoute, candidates, createTrip, planStops, getTripDetail, TRIP_LIST_FROM, TRIP_LIST_SELECT, transitionTrip, updateTrip, validateAssignment } from '../services/trips';
 
 export const tripsRouter = Router();
+
+const stopBody = z.object({
+  locationId: z.coerce.number().int().positive().optional(),
+  distributorId: z.coerce.number().int().positive().optional(),
+  plannedMt: z.coerce.number().positive('Enter a quantity greater than zero.').max(60),
+  freightPerMt: z.coerce.number().min(0).max(1_000_000).optional(),
+  billToId: z.coerce.number().int().positive().optional(),
+});
 
 const createBody = z.object({
   originLocationId: z.coerce.number().int().positive(),
   destinationLocationId: z.coerce.number().int().positive().optional(),
   distributorId: z.coerce.number().int().positive().optional(),
+  stops: z.array(stopBody).min(1).max(8).optional(),
   lpgSource: z.enum(LPG_SOURCES).default('LOCAL'),
-  plannedLoadMt: z.coerce.number().positive('Enter a load greater than zero.').max(60),
+  plannedLoadMt: z.coerce.number().positive('Enter a load greater than zero.').max(60).optional(),
   scheduledDeparture: z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'Invalid date/time'),
   plannedArrival: z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'Invalid date/time').optional(),
   priority: z.enum(PRIORITIES).default('NORMAL'),
@@ -37,7 +48,7 @@ tripsRouter.get('/', requirePerm('trips:view'), wrap(async (req, res) => {
     from: z.string().optional(), to: z.string().optional(), scope: z.enum(['active', 'upcoming', 'history']).optional(),
   }), req.query);
   const where = ['1=1']; const r: Record<string, unknown> = { lim: p.pageSize, off: p.offset };
-  if (p.q) { where.push('(t.code ILIKE :q OR t.vehicle_id IN (SELECT id FROM vehicles WHERE code ILIKE :q OR registration_no ILIKE :q) OR t.driver_id IN (SELECT id FROM drivers WHERE full_name ILIKE :q) OR t.destination_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR t.origin_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR t.distributor_id IN (SELECT id FROM distributors WHERE name ILIKE :q))'); r.q = likeTerm(p.q); }
+  if (p.q) { where.push('(t.code ILIKE :q OR t.vehicle_id IN (SELECT id FROM vehicles WHERE code ILIKE :q OR registration_no ILIKE :q) OR t.driver_id IN (SELECT id FROM drivers WHERE full_name ILIKE :q) OR t.destination_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR (t.stop_count > 1 AND t.id IN (SELECT ts.trip_id FROM trip_stops ts JOIN locations tl ON tl.id = ts.location_id WHERE tl.name ILIKE :q)) OR t.origin_location_id IN (SELECT id FROM locations WHERE name ILIKE :q) OR t.distributor_id IN (SELECT id FROM distributors WHERE name ILIKE :q))'); r.q = likeTerm(p.q); }
   if (f.status) { where.push('t.status IN (:st)'); r.st = f.status.split(',').filter((s) => (TRIP_STATUSES as readonly string[]).includes(s)); }
   if (f.scope === 'active') where.push(`t.status IN ('DISPATCHED','IN_TRANSIT','DELAYED','ON_HOLD','ARRIVED','DELIVERED','RETURNING')`);
   if (f.scope === 'upcoming') where.push(`t.status IN ('DRAFT','PLANNED','ASSIGNED')`);
@@ -45,8 +56,8 @@ tripsRouter.get('/', requirePerm('trips:view'), wrap(async (req, res) => {
   if (f.plantId) { where.push('t.origin_location_id = :plant'); r.plant = f.plantId; }
   if (f.vehicleId) { where.push('t.vehicle_id = :veh'); r.veh = f.vehicleId; }
   if (f.driverId) { where.push('t.driver_id = :drv'); r.drv = f.driverId; }
-  if (f.destinationId) { where.push('t.destination_location_id = :dest'); r.dest = f.destinationId; }
-  if (f.distributorId) { where.push('t.distributor_id = :dist'); r.dist = f.distributorId; }
+  if (f.destinationId) { where.push('(t.destination_location_id = :dest OR (t.stop_count > 1 AND t.id IN (SELECT trip_id FROM trip_stops WHERE location_id = :dest)))'); r.dest = f.destinationId; }
+  if (f.distributorId) { where.push('(t.distributor_id = :dist OR (t.stop_count > 1 AND t.id IN (SELECT trip_id FROM trip_stops WHERE distributor_id = :dist)))'); r.dist = f.distributorId; }
   if (f.region) { where.push('dl.region = :region'); r.region = f.region; }
   if (f.priority) { where.push('t.priority = :prio'); r.prio = f.priority; }
   if (f.from) { where.push('t.scheduled_departure >= :from'); r.from = f.from; }
@@ -81,12 +92,15 @@ tripsRouter.get('/board', requirePerm('trips:view'), wrap(async (req, res) => {
   res.json({ columns: out });
 }));
 
-/** Route estimate for the trip wizard (creates a synthetic route on first use; see docs/ADR on routing). */
+/** Route estimate for the trip wizard. `stopIds` (comma separated, in order) previews a multi-drop route; each stop gets its ETA offset and tariff. */
 tripsRouter.get('/route-preview', requirePerm('trips:create'), wrap(async (req, res) => {
-  const b = parse(z.object({ originId: z.coerce.number().int().positive(), destinationId: z.coerce.number().int().positive() }), req.query);
-  if (b.originId === b.destinationId) return res.json({ route: null });
-  const r = await getOrCreateRoute(b.originId, b.destinationId);
-  res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min, freightPerMt: r.freight_per_mt } });
+  const b = parse(z.object({ originId: z.coerce.number().int().positive(), destinationId: z.coerce.number().int().positive().optional(), stopIds: z.string().regex(/^\d+(,\d+)*$/).optional() }), req.query);
+  const ids = b.stopIds ? b.stopIds.split(',').map(Number) : b.destinationId ? [b.destinationId] : [];
+  if (!ids.length || ids.includes(b.originId)) return res.json({ route: null });
+  const plan = await sequelize.transaction((tx) => planStops(tx, b.originId, ids.map((locationId) => ({ locationId, plannedMt: 1 })), { requireActiveDistributor: false }));
+  const r = plan.route;
+  res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min, freightPerMt: ids.length === 1 ? r.freight_per_mt : null },
+    stops: plan.rows.map((x) => ({ seq: x.seq, locationId: x.locationId, etaMin: x.etaMin, routeFrac: x.routeFrac, freightPerMt: can(req.user!.role, 'finance:view') ? x.freightPerMt : undefined })) });
 }));
 
 tripsRouter.post('/', requirePerm('trips:create'), wrap(async (req, res) => {
@@ -178,3 +192,21 @@ tripsRouter.post('/:id/safety-checks', requirePerm('safety:report'), wrap(async 
   await audit(req, { action: 'SAFETY_CHECK', entityType: 'TRIP', entityId: tid, entityLabel: t.code, meta: { result } });
   res.status(201).json(await getTripDetail(tid, req.user!));
 }));
+
+const stopActionBody = z.object({
+  deliveredMt: z.coerce.number().positive().max(60).optional(),
+  receivedBy: z.string().trim().max(120).optional(),
+  deliveryNoteNo: z.string().trim().max(40).optional(),
+  podNotes: z.string().trim().max(500).optional(),
+  reason: z.string().trim().max(250).optional(),
+  clientEventId: z.string().trim().max(60).optional(),
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+});
+for (const action of ['arrive', 'deliver', 'skip'] as const) {
+  tripsRouter.post(`/:id/stops/:stopId/${action}`, requirePerm('trips:progress'), wrap(async (req, res) => {
+    const tid = id(req);
+    await stopAction(req.user!, req, tid, Number(req.params.stopId), action, parse(stopActionBody, req.body));
+    res.json(await getTripDetail(tid, req.user!));
+  }));
+}

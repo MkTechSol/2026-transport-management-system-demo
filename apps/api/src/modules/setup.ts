@@ -57,6 +57,10 @@ setupRouter.get('/integrity', requirePerm('settings:view'), wrap(async (_req, re
   add('Approved trip expenses are all in the ledger', unposted.n === 0, unposted.n ? `${unposted.n} approved expense(s) have no voucher` : 'All approved expenses are posted');
   const unbilled = await q1<any>(`SELECT count(*)::int AS n FROM trips WHERE status = 'COMPLETED' AND invoice_id IS NULL AND freight_per_mt > 0 AND bill_to_id IS NOT NULL`);
   add('Completed trips are all invoiced', unbilled.n === 0, unbilled.n ? `${unbilled.n} completed trip(s) await billing (see Billing queue)` : 'Nothing awaiting billing');
+  const stopMismatch = await q1<any>(`SELECT count(*)::int AS n FROM trips t WHERE t.stop_count <> (SELECT count(*) FROM trip_stops s WHERE s.trip_id = t.id)
+      OR t.destination_location_id <> (SELECT s.location_id FROM trip_stops s WHERE s.trip_id = t.id AND s.seq = t.stop_count)
+      OR (t.status = 'COMPLETED' AND t.delivered_mt IS NOT NULL AND abs(t.delivered_mt - COALESCE((SELECT sum(s.delivered_mt) FROM trip_stops s WHERE s.trip_id = t.id AND s.status = 'DELIVERED'), 0)) > 0.005)`);
+  add('Trip stops agree with trip totals (multi-drop)', stopMismatch.n === 0, stopMismatch.n ? `${stopMismatch.n} trip(s) differ from their stops` : 'Every trip matches its delivery stops');
   const po = await q1<any>('SELECT count(*)::int AS n FROM purchase_order_lines WHERE received_qty > qty');
   add('No purchase order is over-received', po.n === 0, po.n ? `${po.n} line(s) over-received` : 'Receipts are within order quantities');
   const pay = await q1<any>(`SELECT count(*)::int AS n FROM payroll_runs WHERE status IN ('POSTED','PAID') AND voucher_id IS NULL`);

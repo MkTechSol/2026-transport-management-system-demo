@@ -73,7 +73,7 @@ export async function createInvoice(user: AuthUser | null, req: any, input: Invo
   if (tax > 0) vlines.push({ accountKey: 'tax_payable', [sign ? 'debit' : 'credit']: tax, memo: `Sales tax ${taxPct}%` });
   const v = await postVoucher({ type: sign ? 'SALE_RETURN' : 'SALE_INVOICE', date, narration: `${sign ? 'Credit note' : 'Invoice'} ${invoiceNo} — ${cust.name}${trip ? ` (${trip.code})` : ''}`, lines: vlines, ...party, tripId: input.tripId ?? null, vehicleId: trip?.vehicle_id ?? null, sourceType: 'INVOICE', sourceId: inv.id, user }, tx);
   await exec('UPDATE sales_invoices SET voucher_id = :v WHERE id = :i', { v: v.id, i: inv.id }, tx);
-  if (trip && kind === 'INVOICE') await exec('UPDATE trips SET invoice_id = :i WHERE id = :t', { i: inv.id, t: trip.id }, tx);
+  if (trip && kind === 'INVOICE') await exec('UPDATE trips SET invoice_id = COALESCE(invoice_id, :i) WHERE id = :t', { i: inv.id, t: trip.id }, tx);
   if (input.orderId) await exec(`UPDATE sales_orders SET status = 'INVOICED' WHERE id = :o`, { o: input.orderId }, tx);
   if (sign) {
     // A credit note settles the referenced invoice (up to its outstanding amount); anything left stays as customer credit on the ledger.
@@ -166,14 +166,37 @@ export async function postExpense(e: any, tx?: any) {
   await exec('UPDATE trip_expenses SET voucher_id = :v WHERE id = :id', { v: v.id, id: e.id }, tx);
 }
 
-async function invoiceCompletedTrip(trip: any, tx?: any) {
-  const t = await q1<any>(
-    `SELECT t.id, t.code, t.trip_type, t.vehicle_id, t.bill_to_id, t.freight_per_mt, t.delivered_mt, t.loaded_mt, t.planned_load_mt, t.invoice_id, o.name AS origin, COALESCE(d.name, dl.name) AS dest
-       FROM trips t JOIN locations o ON o.id = t.origin_location_id LEFT JOIN locations dl ON dl.id = t.destination_location_id LEFT JOIN distributors d ON d.id = t.distributor_id WHERE t.id = :id`, { id: trip.id }, tx);
-  if (!t || t.invoice_id || !t.bill_to_id || !(Number(t.freight_per_mt) > 0)) return;
-  const mt = Number(t.delivered_mt ?? t.loaded_mt ?? t.planned_load_mt);
-  await createInvoice(null, undefined, { customerId: t.bill_to_id, tripId: t.id, lines: [{ description: `Freight ${t.code}: ${t.origin} → ${t.dest}`, qty: mt, rate: Number(t.freight_per_mt), vehicleId: t.vehicle_id }] }, tx);
+/** What a trip should be invoiced as: one group per paying customer, one line per delivered stop (a normal trip has one stop). */
+export async function tripInvoiceGroups(tripId: number, tx?: any): Promise<{ customerId: number; lines: InvoiceLineInput[] }[]> {
+  const t = await q1<any>(`SELECT t.id, t.code, t.vehicle_id, o.name AS origin FROM trips t JOIN locations o ON o.id = t.origin_location_id WHERE t.id = :id`, { id: tripId }, tx);
+  if (!t) throw notFound('Trip');
+  const stops = await q<any>(
+    `SELECT s.seq, s.status, s.planned_mt, s.delivered_mt, s.freight_per_mt, COALESCE(s.bill_to_id, s.distributor_id, t.bill_to_id) AS cust, l.name AS loc, t.stop_count, t.loaded_mt
+       FROM trip_stops s JOIN trips t ON t.id = s.trip_id JOIN locations l ON l.id = s.location_id WHERE s.trip_id = :id AND s.status <> 'SKIPPED' ORDER BY s.seq`, { id: tripId }, tx);
+  const groups = new Map<number, InvoiceLineInput[]>();
+  for (const s of stops) {
+    if (!s.cust || !(Number(s.freight_per_mt) > 0)) continue;
+    // billable quantity: what was delivered; for trips completed without stop detail fall back to loaded / planned
+    const mt = Number(s.delivered_mt ?? (s.stop_count === 1 ? (s.loaded_mt ?? s.planned_mt) : s.planned_mt));
+    if (!(mt > 0)) continue;
+    const arr = groups.get(s.cust) ?? []; groups.set(s.cust, arr);
+    arr.push({ description: `Freight ${t.code}: ${t.origin} → ${s.loc}${s.stop_count > 1 ? ` (stop ${s.seq}/${s.stop_count})` : ''}`, qty: mt, rate: Number(s.freight_per_mt), vehicleId: t.vehicle_id });
+  }
+  return [...groups.entries()].map(([customerId, lines]) => ({ customerId, lines }));
 }
+
+/** Creates the invoices a trip is still missing (idempotent per customer via uq_si_trip). Returns the invoices created. */
+export async function invoiceTrip(user: AuthUser | null, req: any, tripId: number, tx?: any, onlyCustomer?: number): Promise<any[]> {
+  const made: any[] = [];
+  const existing = new Set((await q<any>(`SELECT customer_id FROM sales_invoices WHERE trip_id = :t AND kind = 'INVOICE' AND status <> 'VOID'`, { t: tripId }, tx)).map((r: any) => r.customer_id));
+  for (const g of await tripInvoiceGroups(tripId, tx)) {
+    if (existing.has(g.customerId) || (onlyCustomer && g.customerId !== onlyCustomer)) continue;
+    made.push(await createInvoice(user, req, { customerId: g.customerId, tripId, lines: g.lines }, tx));
+  }
+  return made;
+}
+
+async function invoiceCompletedTrip(trip: any, tx?: any) { await invoiceTrip(null, undefined, trip.id, tx); }
 
 export function registerFinanceHooks() {
   postHooks.expenseApproved = postExpense;

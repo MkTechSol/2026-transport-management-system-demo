@@ -14,6 +14,7 @@ routesRouter.get('/', requirePerm('routes:view', 'trips:create'), wrap(async (re
   const p = paging(req.query);
   const f = parse(z.object({ active: z.enum(['true', 'false']).optional(), originId: z.coerce.number().optional(), destinationId: z.coerce.number().optional() }), req.query);
   const where = ['1=1']; const r: Record<string, unknown> = { lim: p.pageSize, off: p.offset };
+  where.push("rt.kind = 'DIRECT'");
   if (p.q) { where.push('(rt.name ILIKE :q OR o.name ILIKE :q OR d.name ILIKE :q OR rt.code ILIKE :q)'); r.q = likeTerm(p.q); }
   if (f.active) { where.push('rt.active = :act'); r.act = f.active === 'true'; }
   if (f.originId) { where.push('rt.origin_location_id = :o'); r.o = f.originId; }
@@ -41,7 +42,7 @@ const body = z.object({
 routesRouter.post('/', requirePerm('routes:manage'), wrap(async (req, res) => {
   const b = parse(body, req.body);
   if (b.originLocationId === b.destinationLocationId) throw badRequest('Origin and destination must be different.', { fields: { destinationLocationId: 'Must differ from origin' } });
-  if (await q1('SELECT 1 AS x FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: b.originLocationId, d: b.destinationLocationId })) throw conflict('A route between these two locations already exists. Edit it instead.');
+  if (await q1('SELECT 1 AS x FROM routes WHERE kind = \'DIRECT\' AND origin_location_id = :o AND destination_location_id = :d', { o: b.originLocationId, d: b.destinationLocationId })) throw conflict('A route between these two locations already exists. Edit it instead.');
   const o = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: b.originLocationId });
   const d = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: b.destinationLocationId });
   if (!o || !d) throw notFound('Location');

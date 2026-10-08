@@ -129,8 +129,8 @@ distributorsRouter.get('/', requirePerm('distributors:view', 'trips:view'), wrap
   const [rows, [{ total }]] = await Promise.all([
     q(`SELECT d.*, l.lat, l.lng, s.trips_total, s.mt_total, s.last_delivery${showBal ? `, COALESCE(b.bal, 0)::float AS balance` : ''}
          FROM distributors d JOIN locations l ON l.id = d.location_id${showBal ? ` LEFT JOIN LATERAL (SELECT sum(x.debit - x.credit) AS bal FROM party_balances x WHERE x.party_type = 'CUSTOMER' AND x.party_id = d.id AND x.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) b ON true` : ''}
-         LEFT JOIN LATERAL (SELECT count(*)::int AS trips_total, COALESCE(sum(t.delivered_mt),0)::float AS mt_total, max(t.delivered_at) AS last_delivery
-                              FROM trips t WHERE t.distributor_id = d.id AND t.status = 'COMPLETED') s ON true
+         LEFT JOIN LATERAL (SELECT count(DISTINCT s.trip_id)::int AS trips_total, COALESCE(sum(s.delivered_mt),0)::float AS mt_total, max(s.delivered_at) AS last_delivery
+                              FROM trip_stops s JOIN trips t ON t.id = s.trip_id WHERE s.distributor_id = d.id AND t.status = 'COMPLETED' AND s.status = 'DELIVERED') s ON true
         WHERE ${w} ORDER BY ${orderBy(p.sort, p.dir, { name: 'd.name', code: 'd.code', region: 'd.region', city: 'd.city', trips: 's.trips_total', volume: 's.mt_total' }, 'd.name')} LIMIT :lim OFFSET :off`, r),
     q(`SELECT count(*)::int AS total FROM distributors d WHERE ${w}`, r),
   ]);
@@ -142,14 +142,15 @@ distributorsRouter.get('/:id', requirePerm('distributors:view'), wrap(async (req
   const d = await q1(`SELECT d.*, l.lat, l.lng FROM distributors d JOIN locations l ON l.id = d.location_id WHERE d.id = :id`, { id: did });
   if (!d) throw notFound('Distributor');
   const [trips, stats, byMonth] = await Promise.all([
-    q(`SELECT t.id, t.code, t.status, t.scheduled_departure, t.planned_load_mt, t.delivered_mt, o.name AS origin_name, v.code AS vehicle_code
-         FROM trips t JOIN locations o ON o.id = t.origin_location_id LEFT JOIN vehicles v ON v.id = t.vehicle_id
-        WHERE t.distributor_id = :id ORDER BY t.scheduled_departure DESC LIMIT 15`, { id: did }),
-    q1(`SELECT count(*) FILTER (WHERE status = 'COMPLETED')::int AS completed, count(*) FILTER (WHERE status NOT IN ('COMPLETED','CANCELLED'))::int AS open,
-               COALESCE(sum(delivered_mt),0)::float AS mt_total, COALESCE(round(avg(delay_minutes) FILTER (WHERE status = 'COMPLETED')),0)::int AS avg_delay_min
-          FROM trips WHERE distributor_id = :id`, { id: did }),
-    q(`SELECT to_char(date_trunc('month', delivered_at), 'Mon YY') AS month, sum(delivered_mt)::float AS mt FROM trips
-        WHERE distributor_id = :id AND delivered_at >= date_trunc('month', now()) - interval '5 months' GROUP BY 1, date_trunc('month', delivered_at) ORDER BY date_trunc('month', delivered_at)`, { id: did }),
+    // Stop-based so a distributor served on a multi-drop trip sees only its own drop (quantity and date), not the whole load.
+    q(`SELECT t.id, t.code, t.status, t.scheduled_departure, s.planned_mt AS planned_load_mt, s.delivered_mt, t.stop_count, o.name AS origin_name, v.code AS vehicle_code
+         FROM trip_stops s JOIN trips t ON t.id = s.trip_id JOIN locations o ON o.id = t.origin_location_id LEFT JOIN vehicles v ON v.id = t.vehicle_id
+        WHERE s.distributor_id = :id ORDER BY t.scheduled_departure DESC LIMIT 15`, { id: did }),
+    q1(`SELECT count(*) FILTER (WHERE t.status = 'COMPLETED')::int AS completed, count(*) FILTER (WHERE t.status NOT IN ('COMPLETED','CANCELLED'))::int AS open,
+               COALESCE(sum(s.delivered_mt),0)::float AS mt_total, COALESCE(round(avg(t.delay_minutes) FILTER (WHERE t.status = 'COMPLETED')),0)::int AS avg_delay_min
+          FROM trip_stops s JOIN trips t ON t.id = s.trip_id WHERE s.distributor_id = :id`, { id: did }),
+    q(`SELECT to_char(date_trunc('month', s.delivered_at), 'Mon YY') AS month, sum(s.delivered_mt)::float AS mt FROM trip_stops s
+        WHERE s.distributor_id = :id AND s.status = 'DELIVERED' AND s.delivered_at >= date_trunc('month', now()) - interval '5 months' GROUP BY 1, date_trunc('month', s.delivered_at) ORDER BY date_trunc('month', s.delivered_at)`, { id: did }),
   ]);
   res.json({ distributor: d, trips, stats, monthly: byMonth });
 }));

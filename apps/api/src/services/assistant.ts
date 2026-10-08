@@ -19,7 +19,7 @@ export async function ask(role: Role, text: string): Promise<Answer> {
 
   if (trip) {
     if (!can(role, 'trips:view')) return denied('trips');
-    const r = await q1<any>(`SELECT t.code, t.status, t.trip_type, t.planned_load_mt::float AS load_mt, t.progress_pct::float AS progress, t.eta_at, t.delay_minutes, v.code AS vehicle, dr.full_name AS driver, o.name AS origin, COALESCE(d.name, dl.name) AS dest, t.id
+    const r = await q1<any>(`SELECT t.code, t.status, t.trip_type, t.planned_load_mt::float AS load_mt, t.progress_pct::float AS progress, t.eta_at, t.delay_minutes, v.code AS vehicle, dr.full_name AS driver, o.name AS origin, CASE WHEN t.stop_count > 1 THEN (SELECT string_agg(sl.name, ' › ' ORDER BY ss.seq) FROM trip_stops ss JOIN locations sl ON sl.id = ss.location_id WHERE ss.trip_id = t.id) ELSE COALESCE(d.name, dl.name) END AS dest, t.id
       FROM trips t JOIN locations o ON o.id = t.origin_location_id LEFT JOIN locations dl ON dl.id = t.destination_location_id LEFT JOIN distributors d ON d.id = t.distributor_id LEFT JOIN vehicles v ON v.id = t.vehicle_id LEFT JOIN drivers dr ON dr.id = t.driver_id WHERE t.code = :c`, { c: trip });
     if (!r) return { intent: 'trip', answer: `I couldn’t find trip ${trip}.`, suggestions: SUGGEST.slice(0, 3) };
     const eta = r.eta_at ? ` ETA ${new Date(r.eta_at).toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : '';

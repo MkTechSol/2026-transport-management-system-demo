@@ -1,5 +1,5 @@
 import { q, q1, exec, sequelize } from '../db/sequelize';
-import { createInvoice, createReceipt, postExpense } from '../services/sales';
+import { createInvoice, tripInvoiceGroups, createReceipt, postExpense } from '../services/sales';
 import { accountId, postVoucher } from '../services/ledger';
 import type { Rng } from './rng';
 
@@ -72,14 +72,15 @@ export async function seedFinance(c: { rng: Rng; NOW: number; log?: (m: string) 
   c.log?.(`posted ${expenses.length} trip expense vouchers`);
 
   // 2) freight invoices for completed trips
-  const trips = await q<any>(`SELECT t.id, t.code, t.trip_type, t.vehicle_id, t.bill_to_id, t.freight_per_mt::float AS rate, COALESCE(t.delivered_mt, t.loaded_mt, t.planned_load_mt)::float AS mt, t.completed_at::date::text AS done,
-      o.name AS origin, COALESCE(d.name, dl.name) AS dest FROM trips t JOIN locations o ON o.id = t.origin_location_id LEFT JOIN locations dl ON dl.id = t.destination_location_id LEFT JOIN distributors d ON d.id = t.distributor_id
-    WHERE t.status = 'COMPLETED' AND t.freight_per_mt > 0 AND t.bill_to_id IS NOT NULL ORDER BY t.completed_at, t.id`);
+  const trips = await q<any>(`SELECT t.id, t.vehicle_id, t.completed_at::date::text AS done FROM trips t WHERE t.status = 'COMPLETED' AND t.freight_per_mt > 0 ORDER BY t.completed_at, t.id`);
   const invoices: any[] = [];
   for (const t of trips) {
     const date = t.done < openDate ? openDate : t.done;
-    const inv = await createInvoice(null, undefined, { customerId: t.bill_to_id, tripId: t.id, date, lines: [{ description: `Freight ${t.code}: ${t.origin} → ${t.dest}`, qty: t.mt, rate: t.rate, vehicleId: t.vehicle_id }] });
-    invoices.push({ ...inv, customer_id: t.bill_to_id });
+    // one invoice per paying customer (a multi-drop trip can bill several distributors)
+    for (const g of await tripInvoiceGroups(t.id)) {
+      const inv = await createInvoice(null, undefined, { customerId: g.customerId, tripId: t.id, date, lines: g.lines });
+      invoices.push({ ...inv, customer_id: g.customerId });
+    }
   }
   // a few older invoices carried forward so the aging report has real 30/60/90+ buckets
   const custs = await q<any>(`SELECT id, name FROM distributors WHERE customer_type = 'DISTRIBUTOR' ORDER BY id LIMIT 12`);

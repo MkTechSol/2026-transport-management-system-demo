@@ -7,6 +7,7 @@ export const SETTING_DEFAULTS: Record<string, { value: unknown; label: string; d
   'trip.delayThresholdMin': { value: 30, label: 'Delay alert threshold (minutes)', description: 'A trip is flagged delayed when its projected arrival is this far behind plan.', group: 'Trips' },
   'trip.onTimeToleranceMin': { value: 15, label: 'On-time tolerance (minutes)', description: 'Arrivals within this tolerance of plan count as on time.', group: 'Trips' },
   'trip.turnaroundHours': { value: 2, label: 'Turnaround time (hours)', description: 'Added to the round trip when checking vehicle / driver availability windows.', group: 'Trips' },
+  'trip.stopDwellMin': { value: 45, label: 'Time per delivery stop (minutes)', description: 'Unloading / paperwork time added to the ETA for every drop on a multi-stop trip.', group: 'Trips' },
   'expense.autoApproveLimit': { value: 5000, label: 'Expense auto-approval limit (PKR)', description: 'Trip expenses at or below this amount are approved automatically.', group: 'Expenses' },
   'fuel.varianceThresholdPct': { value: 20, label: 'Fuel variance threshold (%)', description: 'Fuel entries more than this % above the expected litres are flagged for review.', group: 'Fuel' },
   'fuel.defaultKmpl': { value: 2.6, label: 'Default bowzer fuel norm (km/litre)', description: 'Used when a vehicle has no specific norm.', group: 'Fuel' },

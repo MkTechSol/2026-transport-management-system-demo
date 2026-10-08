@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { LOCATION_TYPES, REGIONS } from '@gasman/shared';
+import { CUSTOMER_TYPES, LOCATION_TYPES, REGIONS } from '@gasman/shared';
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { conflict, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
@@ -104,6 +104,12 @@ const distBody = z.object({
   lng: z.coerce.number().min(-180).max(180),
   status: z.enum(['ACTIVE', 'ON_HOLD', 'INACTIVE']).optional(),
   creditStatus: z.enum(['GOOD', 'WATCH', 'BLOCKED']).optional(),
+  customerType: z.enum(CUSTOMER_TYPES).optional(),
+  creditLimitPkr: z.coerce.number().min(0).max(1e12).optional(),
+  creditAlertPct: z.coerce.number().int().min(1).max(100).optional(),
+  whatsapp: z.string().trim().max(30).optional().nullable(),
+  email: z.string().trim().max(120).optional().nullable(),
+  ntn: z.string().trim().max(30).optional().nullable(),
 });
 
 distributorsRouter.get('/', requirePerm('distributors:view', 'trips:view'), wrap(async (req, res) => {
@@ -154,9 +160,10 @@ distributorsRouter.post('/', requirePerm('distributors:manage'), wrap(async (req
       `INSERT INTO locations (code, name, type, city, region, address, lat, lng, contact_phone) VALUES (:code, :name, 'DISTRIBUTOR', :city, :region, :addr, :lat, :lng, :ph) RETURNING id`,
       { code: `LOC-${b.code.toUpperCase()}`.slice(0, 30), name: b.name, city: b.city, region: b.region, addr: b.address ?? null, lat: b.lat, lng: b.lng, ph: b.phone ?? null }, tx);
     return q1<any>(
-      `INSERT INTO distributors (code, name, city, region, address, contact_name, phone, location_id, status, credit_status)
-       VALUES (:code, :name, :city, :region, :addr, :cn, :ph, :loc, :st, :cs) RETURNING *`,
-      { code: b.code.toUpperCase(), name: b.name, city: b.city, region: b.region, addr: b.address ?? null, cn: b.contactName ?? null, ph: b.phone ?? null, loc: loc.id, st: b.status ?? 'ACTIVE', cs: b.creditStatus ?? 'GOOD' }, tx);
+      `INSERT INTO distributors (code, name, city, region, address, contact_name, phone, location_id, status, credit_status, customer_type, credit_limit_pkr, credit_alert_pct, whatsapp, email, ntn)
+       VALUES (:code, :name, :city, :region, :addr, :cn, :ph, :loc, :st, :cs, :ct, :cl, :ca, :wa, :em, :ntn) RETURNING *`,
+      { code: b.code.toUpperCase(), name: b.name, city: b.city, region: b.region, addr: b.address ?? null, cn: b.contactName ?? null, ph: b.phone ?? null, loc: loc.id, st: b.status ?? 'ACTIVE', cs: b.creditStatus ?? 'GOOD',
+        ct: b.customerType ?? 'DISTRIBUTOR', cl: b.creditLimitPkr ?? 0, ca: b.creditAlertPct ?? 80, wa: b.whatsapp ?? null, em: b.email ?? null, ntn: b.ntn ?? null }, tx);
   });
   await audit(req, { action: 'CREATE', entityType: 'DISTRIBUTOR', entityId: row.id, entityLabel: row.name });
   res.status(201).json({ distributor: row });
@@ -167,7 +174,7 @@ distributorsRouter.patch('/:id', requirePerm('distributors:manage'), wrap(async 
   const b = parse(distBody.partial(), req.body);
   const cur = await q1<any>('SELECT * FROM distributors WHERE id = :id', { id: did });
   if (!cur) throw notFound('Distributor');
-  const cols: Record<string, string> = { name: 'name', city: 'city', region: 'region', address: 'address', contactName: 'contact_name', phone: 'phone', status: 'status', creditStatus: 'credit_status' };
+  const cols: Record<string, string> = { name: 'name', city: 'city', region: 'region', address: 'address', contactName: 'contact_name', phone: 'phone', status: 'status', creditStatus: 'credit_status', customerType: 'customer_type', creditLimitPkr: 'credit_limit_pkr', creditAlertPct: 'credit_alert_pct', whatsapp: 'whatsapp', email: 'email', ntn: 'ntn' };
   const sets: string[] = []; const r: Record<string, unknown> = { id: did };
   for (const [k, c] of Object.entries(cols)) if ((b as any)[k] !== undefined) { sets.push(`${c} = :${c}`); r[c] = (b as any)[k]; }
   if (sets.length) await exec(`UPDATE distributors SET ${sets.join(', ')}, updated_at = now() WHERE id = :id`, r);

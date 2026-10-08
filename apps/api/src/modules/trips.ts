@@ -23,6 +23,8 @@ const createBody = z.object({
   vehicleId: z.coerce.number().int().positive().optional(),
   driverId: z.coerce.number().int().positive().optional(),
   submit: z.boolean().optional(),
+  freightPerMt: z.coerce.number().min(0).max(1_000_000).optional(),
+  billToId: z.coerce.number().int().positive().optional(),
 });
 
 const SORTS = { code: 't.code', departure: 't.scheduled_departure', status: 't.status', load: 't.planned_load_mt', priority: 't.priority', eta: 't.eta_at' };
@@ -84,7 +86,7 @@ tripsRouter.get('/route-preview', requirePerm('trips:create'), wrap(async (req, 
   const b = parse(z.object({ originId: z.coerce.number().int().positive(), destinationId: z.coerce.number().int().positive() }), req.query);
   if (b.originId === b.destinationId) return res.json({ route: null });
   const r = await getOrCreateRoute(b.originId, b.destinationId);
-  res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min } });
+  res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min, freightPerMt: r.freight_per_mt } });
 }));
 
 tripsRouter.post('/', requirePerm('trips:create'), wrap(async (req, res) => {
@@ -134,6 +136,8 @@ const transitionBody = z.object({
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
   clientEventId: z.string().trim().max(60).optional(),
+  odometerKm: z.coerce.number().int().min(0).max(5_000_000).optional(),
+  upliftVoucherNo: z.string().trim().max(40).optional(),
 });
 
 tripsRouter.post('/:id/transition', requirePerm('trips:progress', 'trips:dispatch', 'trips:cancel'), wrap(async (req, res) => {

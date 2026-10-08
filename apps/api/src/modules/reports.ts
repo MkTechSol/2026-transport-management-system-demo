@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { can } from '@gasman/shared';
+import { can, Permission } from '@gasman/shared';
 import { q } from '../db/sequelize';
 import { forbidden, badRequest } from '../lib/errors';
 import { listResponse, paging, parse, wrap } from '../lib/http';
@@ -12,7 +12,7 @@ export const reportsRouter = Router();
 
 interface Filters { from: string; to: string; plantId?: number; vehicleId?: number; driverId?: number; destinationId?: number; region?: string; status?: string }
 interface Col { key: string; label: string; type?: 'text' | 'number' | 'date' | 'datetime' | 'status' | 'percent' }
-interface Def { title: string; description: string; columns: Col[]; build: (f: Filters) => { sql: string; r: Record<string, unknown>; order: string } }
+interface Def { perm?: Permission; title: string; description: string; columns: Col[]; build: (f: Filters) => { sql: string; r: Record<string, unknown>; order: string } }
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -95,10 +95,44 @@ const DEFS: Record<string, Def> = {
       sql: `SELECT o.name AS plant, dl.region, count(*)::int AS trips, count(*) FILTER (WHERE t.status = 'COMPLETED')::int AS completed, count(*) FILTER (WHERE t.status = 'CANCELLED')::int AS cancelled,
               count(*) FILTER (WHERE t.status = 'DELAYED' OR (t.status = 'COMPLETED' AND t.delay_minutes > 15))::int AS delayed, COALESCE(sum(t.delivered_mt),0)::float AS lpg_mt ${TRIP_FROM} WHERE ${where} GROUP BY o.name, dl.region` }; },
   },
+  'trip-profitability': {
+    perm: 'finance:view', title: 'Trip Profitability', description: 'Freight income, approved expenses and profit per completed trip (freight = delivered MT × route rate).',
+    columns: [{ key: 'code', label: 'Trip' }, { key: 'completed_at', label: 'Completed', type: 'datetime' }, { key: 'route', label: 'Route' }, { key: 'vehicle', label: 'Vehicle' }, { key: 'owner', label: 'Owner' }, { key: 'delivered_mt', label: 'Delivered MT', type: 'number' }, { key: 'rate', label: 'Rate / MT', type: 'number' }, { key: 'income', label: 'Income (PKR)', type: 'number' }, { key: 'expenses', label: 'Expenses (PKR)', type: 'number' }, { key: 'profit', label: 'Profit (PKR)', type: 'number' }, { key: 'margin_pct', label: 'Margin', type: 'percent' }],
+    build: (f) => { const { where, r } = tripWhere({ ...f, status: undefined }, 't', 'completed_at'); return { r, order: 'completed_at DESC',
+      sql: `SELECT t.code, t.completed_at, o.name || ' → ' || dl.name AS route, v.code AS vehicle, v.owner_name AS owner, t.delivered_mt, t.freight_per_mt::float AS rate,
+              round(t.delivered_mt * t.freight_per_mt)::float AS income, COALESCE(e.amt, 0)::float AS expenses, round(t.delivered_mt * t.freight_per_mt - COALESCE(e.amt, 0))::float AS profit,
+              CASE WHEN t.delivered_mt * t.freight_per_mt > 0 THEN round(100 * (t.delivered_mt * t.freight_per_mt - COALESCE(e.amt, 0)) / (t.delivered_mt * t.freight_per_mt))::int END AS margin_pct
+         ${TRIP_FROM} LEFT JOIN LATERAL (SELECT sum(amount) AS amt FROM trip_expenses x WHERE x.trip_id = t.id AND x.status IN ('APPROVED','REIMBURSED')) e ON true WHERE t.status = 'COMPLETED' AND ${where}` }; },
+  },
+  'owner-pnl': {
+    perm: 'finance:view', title: 'Bowzer / Owner Profit & Loss', description: 'Income, expenses and net per bowzer, grouped by owner (partner) — mirrors the legacy "All Bowzer Profit & Loss".',
+    columns: [{ key: 'owner', label: 'Owner / partner' }, { key: 'vehicle', label: 'Bowzer' }, { key: 'trips', label: 'Trips', type: 'number' }, { key: 'delivered_mt', label: 'MT moved', type: 'number' }, { key: 'income', label: 'Income (PKR)', type: 'number' }, { key: 'expenses', label: 'Expenses (PKR)', type: 'number' }, { key: 'profit', label: 'Net (PKR)', type: 'number' }],
+    build: (f) => { const r: Record<string, unknown> = { from: f.from, to: f.to }; if (f.vehicleId) r.veh = f.vehicleId;
+      return { r, order: 'owner, vehicle', sql: `SELECT COALESCE(v.owner_name, CASE WHEN v.fleet_type = 'HIRED' THEN COALESCE(v.vendor_name, 'Hired') ELSE 'Company-owned' END) AS owner, v.code AS vehicle, count(t.id)::int AS trips, COALESCE(sum(t.delivered_mt), 0)::float AS delivered_mt,
+          COALESCE(round(sum(t.delivered_mt * t.freight_per_mt)), 0)::float AS income, COALESCE(sum(e.amt), 0)::float AS expenses, COALESCE(round(sum(t.delivered_mt * t.freight_per_mt) - sum(COALESCE(e.amt, 0))), 0)::float AS profit
+        FROM vehicles v LEFT JOIN trips t ON t.vehicle_id = v.id AND t.status = 'COMPLETED' AND t.completed_at >= :from AND t.completed_at < (:to::date + 1)
+        LEFT JOIN LATERAL (SELECT sum(amount) AS amt FROM trip_expenses x WHERE x.trip_id = t.id AND x.status IN ('APPROVED','REIMBURSED')) e ON true
+        WHERE v.archived_at IS NULL ${f.vehicleId ? 'AND v.id = :veh' : ''} GROUP BY v.id` }; },
+  },
+  'fuel-efficiency': {
+    perm: 'fuel:view', title: 'Fuel Efficiency', description: 'Litres, cost and km/litre per vehicle versus its fuel norm.',
+    columns: [{ key: 'vehicle', label: 'Vehicle' }, { key: 'fills', label: 'Fills', type: 'number' }, { key: 'litres', label: 'Litres', type: 'number' }, { key: 'amount', label: 'Cost (PKR)', type: 'number' }, { key: 'avg_kmpl', label: 'Avg km/L', type: 'number' }, { key: 'norm', label: 'Norm km/L', type: 'number' }, { key: 'cost_per_km', label: 'PKR / km', type: 'number' }, { key: 'flagged', label: 'Flagged', type: 'number' }],
+    build: (f) => { const r: Record<string, unknown> = { from: f.from, to: f.to }; if (f.vehicleId) r.veh = f.vehicleId;
+      return { r, order: 'avg_kmpl ASC NULLS LAST', sql: `SELECT v.code AS vehicle, count(x.id)::int AS fills, COALESCE(sum(x.litres), 0)::float AS litres, COALESCE(sum(x.amount), 0)::float AS amount, round(avg(x.kmpl), 2)::float AS avg_kmpl, v.fuel_norm_kmpl::float AS norm,
+          round(sum(x.amount) / NULLIF(sum(x.km_since_last), 0), 1)::float AS cost_per_km, count(*) FILTER (WHERE x.status = 'FLAGGED')::int AS flagged
+        FROM vehicles v JOIN fuel_entries x ON x.vehicle_id = v.id AND x.fueled_at >= :from AND x.fueled_at < (:to::date + 1) WHERE v.archived_at IS NULL ${f.vehicleId ? 'AND v.id = :veh' : ''} GROUP BY v.id` }; },
+  },
+  'expense-summary': {
+    perm: 'expenses:view', title: 'Trip Expense Summary', description: 'Trip expenses by category and status in the period.',
+    columns: [{ key: 'category', label: 'Category' }, { key: 'entries', label: 'Entries', type: 'number' }, { key: 'approved', label: 'Approved (PKR)', type: 'number' }, { key: 'pending', label: 'Pending (PKR)', type: 'number' }, { key: 'rejected', label: 'Rejected (PKR)', type: 'number' }],
+    build: (f) => { const r: Record<string, unknown> = { from: f.from, to: f.to }; if (f.vehicleId) r.veh = f.vehicleId;
+      return { r, order: 'approved DESC', sql: `SELECT x.category, count(*)::int AS entries, COALESCE(sum(x.amount) FILTER (WHERE x.status IN ('APPROVED','REIMBURSED')), 0)::float AS approved, COALESCE(sum(x.amount) FILTER (WHERE x.status = 'SUBMITTED'), 0)::float AS pending, COALESCE(sum(x.amount) FILTER (WHERE x.status = 'REJECTED'), 0)::float AS rejected
+        FROM trip_expenses x WHERE x.incurred_on >= :from AND x.incurred_on <= :to ${f.vehicleId ? 'AND x.vehicle_id = :veh' : ''} GROUP BY x.category` }; },
+  },
 };
 
-reportsRouter.get('/', requirePerm('reports:view'), wrap(async (_req, res) => {
-  res.json({ reports: Object.entries(DEFS).map(([key, d]) => ({ key, title: d.title, description: d.description })) });
+reportsRouter.get('/', requirePerm('reports:view'), wrap(async (req, res) => {
+  res.json({ reports: Object.entries(DEFS).filter(([, d]) => !d.perm || can(req.user!.role, d.perm)).map(([key, d]) => ({ key, title: d.title, description: d.description })) });
 }));
 
 const csvCell = (v: unknown) => { const s = v instanceof Date ? v.toISOString() : v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -106,6 +140,7 @@ const csvCell = (v: unknown) => { const s = v instanceof Date ? v.toISOString() 
 reportsRouter.get('/:type', requirePerm('reports:view'), wrap(async (req, res) => {
   const def = DEFS[req.params.type];
   if (!def) throw badRequest('Unknown report.');
+  if (def.perm && !can(req.user!.role, def.perm)) throw forbidden('Your role cannot view this report.');
   const p = paging(req.query);
   const today = new Date();
   const f = parse(z.object({

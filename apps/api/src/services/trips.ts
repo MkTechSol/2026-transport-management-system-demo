@@ -5,7 +5,12 @@ import {
 } from '@gasman/shared';
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { AppError, conflict, forbidden, notFound, unprocessable, badRequest } from '../lib/errors';
-import { buildSyntheticRoute } from '../lib/geo';
+import crypto from 'node:crypto';
+import { buildSyntheticRoute, demoFreightPerMt } from '../lib/geo';
+import { can, LOADING_LOCATION_TYPES } from '@gasman/shared';
+import { postHooks } from './hooks';
+import { setting } from './settings';
+import { tripEconomics } from './expenses';
 import { config } from '../config';
 import { audit } from './audit';
 import { AUDIENCE, notify } from './notify';
@@ -37,16 +42,16 @@ export const TRIP_LIST_FROM = `
 export async function getOrCreateRoute(originId: number, destId: number, tx?: any) {
   const existing = await q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx);
   if (existing) return existing;
-  const o = await q1<any>('SELECT code, lat, lng FROM locations WHERE id = :id', { id: originId }, tx);
-  const d = await q1<any>('SELECT code, lat, lng FROM locations WHERE id = :id', { id: destId }, tx);
+  const o = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: originId }, tx);
+  const d = await q1<any>('SELECT code, name, lat, lng FROM locations WHERE id = :id', { id: destId }, tx);
   if (!o || !d) throw notFound('Origin or destination');
   const r = buildSyntheticRoute([o.lat, o.lng], [d.lat, d.lng], originId * 31 + destId);
   return q1<any>(
-    `INSERT INTO routes (code, origin_location_id, destination_location_id, distance_km, est_duration_min, path, checkpoints)
-     VALUES (:code, :o, :d, :km, :min, :path, :cps)
+    `INSERT INTO routes (code, name, origin_location_id, destination_location_id, distance_km, est_duration_min, path, checkpoints, freight_per_mt)
+     VALUES (:code, :name, :o, :d, :km, :min, :path, :cps, :fr)
      ON CONFLICT (origin_location_id, destination_location_id) DO UPDATE SET code = routes.code
      RETURNING *`,
-    { code: `RT-${o.code}-${d.code}`.slice(0, 40), o: originId, d: destId, km: r.distanceKm, min: r.estDurationMin, path: JSON.stringify(r.path), cps: JSON.stringify(r.checkpoints) },
+    { code: `RT-${o.code}-${d.code}`.slice(0, 40), name: `${o.name} – ${d.name}`.slice(0, 150), o: originId, d: destId, km: r.distanceKm, min: r.estDurationMin, path: JSON.stringify(r.path), cps: JSON.stringify(r.checkpoints), fr: demoFreightPerMt(r.distanceKm) },
     tx,
   ).then((rows) => rows ?? q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx));
 }
@@ -222,6 +227,8 @@ export interface CreateTripInput {
   vehicleId?: number;
   driverId?: number;
   submit?: boolean;
+  freightPerMt?: number;
+  billToId?: number;
 }
 
 export async function createTrip(user: AuthUser, req: Request, input: CreateTripInput) {
@@ -238,7 +245,8 @@ export async function createTrip(user: AuthUser, req: Request, input: CreateTrip
     if (destId === input.originLocationId) throw badRequest('Origin and destination must be different.', { fields: { destinationLocationId: 'Must differ from origin' } });
     const origin = await q1<any>("SELECT id, name, type FROM locations WHERE id = :id AND status = 'ACTIVE'", { id: input.originLocationId }, tx);
     if (!origin) throw notFound('Origin location');
-    if (!['PLANT', 'TERMINAL', 'DEPOT'].includes(origin.type)) throw badRequest('Trips must start from a plant, terminal or depot.', { fields: { originLocationId: 'Not a loading point' } });
+    if (!(LOADING_LOCATION_TYPES as readonly string[]).includes(origin.type)) throw badRequest('Trips must start from a plant, terminal, depot or gas field (uplift point).', { fields: { originLocationId: 'Not a loading point' } });
+    const tripType = origin.type === 'FIELD' ? 'UPLIFTING' : 'DELIVERY';
     const route = await getOrCreateRoute(input.originLocationId, destId, tx);
     const dep = new Date(input.scheduledDeparture);
     const arr = input.plannedArrival ? new Date(input.plannedArrival) : new Date(dep.getTime() + route.est_duration_min * 60_000);
@@ -248,10 +256,11 @@ export async function createTrip(user: AuthUser, req: Request, input: CreateTrip
     const code = `TRP-${dep.getUTCFullYear()}-${String(n).padStart(4, '0')}`;
     const row = await q1<any>(
       `INSERT INTO trips (code, status, priority, origin_location_id, destination_location_id, distributor_id, route_id, lpg_source,
-          planned_load_mt, scheduled_departure, planned_arrival, notes, created_by, cur_lat, cur_lng)
-       SELECT :code, 'DRAFT', :prio, :o, :d, :dist, :rid, :src, :load, :dep, :arr, :notes, :uid, l.lat, l.lng FROM locations l WHERE l.id = :o
+          planned_load_mt, scheduled_departure, planned_arrival, notes, created_by, cur_lat, cur_lng, trip_type, freight_per_mt, bill_to_id, public_token)
+       SELECT :code, 'DRAFT', :prio, :o, :d, :dist, :rid, :src, :load, :dep, :arr, :notes, :uid, l.lat, l.lng, :tt, :fr, :bill, :tok FROM locations l WHERE l.id = :o
        RETURNING *`,
-      { code, prio: input.priority, o: input.originLocationId, d: destId, dist: distributorId, rid: route.id, src: input.lpgSource, load: input.plannedLoadMt, dep: dep.toISOString(), arr: arr.toISOString(), notes: input.notes ?? null, uid: user.id },
+      { code, prio: input.priority, o: input.originLocationId, d: destId, dist: distributorId, rid: route.id, src: input.lpgSource, load: input.plannedLoadMt, dep: dep.toISOString(), arr: arr.toISOString(), notes: input.notes ?? null, uid: user.id,
+        tt: tripType, fr: input.freightPerMt ?? route.freight_per_mt ?? 0, bill: input.billToId ?? distributorId, tok: crypto.randomBytes(18).toString('base64url') },
       tx,
     );
     await addEvent(tx, row.id, { type: 'STATUS_CHANGE', toStatus: 'DRAFT', message: `Trip ${code} created`, actor: user.id });
@@ -272,7 +281,7 @@ export async function updateTrip(user: AuthUser, req: Request, id: number, patch
     const r: Record<string, unknown> = { id };
     const map: [keyof CreateTripInput, string, (v: any) => unknown][] = [
       ['plannedLoadMt', 'planned_load_mt', (v) => v], ['priority', 'priority', (v) => v], ['notes', 'notes', (v) => v],
-      ['lpgSource', 'lpg_source', (v) => v],
+      ['lpgSource', 'lpg_source', (v) => v], ['freightPerMt', 'freight_per_mt', (v) => v], ['billToId', 'bill_to_id', (v) => v],
       ['scheduledDeparture', 'scheduled_departure', (v) => new Date(v).toISOString()],
       ['plannedArrival', 'planned_arrival', (v) => new Date(v).toISOString()],
     ];
@@ -364,6 +373,8 @@ export interface TransitionPayload {
   lat?: number;
   lng?: number;
   clientEventId?: string;
+  odometerKm?: number;
+  upliftVoucherNo?: string;
 }
 
 /** Actor = null means the system (simulator / scheduled job). */
@@ -424,14 +435,15 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
     msg = `Dispatched with ${vehicle.code} / ${driver.full_name}`;
   }
   if (to === 'IN_TRANSIT' && from === 'DISPATCHED') {
-    if (config.requirePretripCheck) {
+    if (await setting<boolean>('trip.requirePretripCheck')) {
       const ok = await q1<any>(`SELECT 1 AS x FROM safety_checks WHERE trip_id = :id AND kind = 'PRE_TRIP' AND result = 'PASS' LIMIT 1`, { id: t.id }, tx);
       if (!ok) throw unprocessable('A passed pre-trip safety check is required before the trip can start. Record it under Safety checks.', { code: 'PRETRIP_REQUIRED' });
     }
     const loaded = p.loadedMt ?? Number(t.planned_load_mt);
     if (vehicle && loaded > Number(vehicle.capacity_mt)) throw unprocessable(`Loaded quantity (${loaded} MT) exceeds vehicle capacity (${vehicle.capacity_mt} MT).`);
-    sets.push('loaded_mt = :loaded', 'progress_pct = 0', 'delay_minutes = 0');
-    r.loaded = loaded;
+    sets.push('loaded_mt = :loaded', 'progress_pct = 0', 'delay_minutes = 0', 'odometer_start = :odo0', 'uplift_voucher_no = :uvn');
+    r.loaded = loaded; r.odo0 = p.odometerKm ?? vehicle?.odometer_km ?? null; r.uvn = p.upliftVoucherNo?.trim() || null;
+    if (p.odometerKm != null && vehicle && p.odometerKm < vehicle.odometer_km - 500) throw unprocessable(`Start odometer ${p.odometerKm} km is far below the vehicle's last reading (${vehicle.odometer_km} km). Please re-check.`);
     msg = `Departed with ${loaded} MT LPG`;
   }
   if (to === 'ARRIVED') {
@@ -451,6 +463,14 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
     msg = `Delivered ${p.deliveredMt} MT, received by ${p.receivedBy}`;
   }
   if (to === 'RETURNING') { sets.push('progress_pct = 0', 'cur_speed_kmh = 0'); msg = 'Vehicle started return to plant'; }
+  if (to === 'COMPLETED') {
+    const route0 = t.route_id ? await q1<any>('SELECT distance_km FROM routes WHERE id = :id', { id: t.route_id }, tx) : null;
+    const start = t.odometer_start ?? vehicle?.odometer_km ?? 0;
+    const end = p.odometerKm ?? (route0 ? Math.round(start + Number(route0.distance_km) * 2) : start);
+    if (end < start) throw unprocessable(`End odometer (${end} km) cannot be lower than the start reading (${start} km).`, { fields: { odometerKm: 'Lower than start reading' } });
+    sets.push('odometer_end = :odo1'); r.odo1 = end;
+    msg = `Trip completed — ${end - start} km run (meter ${start} → ${end})`;
+  }
   if (tr.stamp && !sets.some((s) => s.startsWith(tr!.stamp!))) sets.push(`${tr.stamp} = now()`);
   if (to === 'DISPATCHED' && from === 'ASSIGNED') {
     // vehicle leaves the yard from its origin
@@ -470,7 +490,8 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
     const o = await q1<any>('SELECT lat, lng, id FROM locations WHERE id = :id', { id: t.origin_location_id }, tx);
     if (vehicle && vehicle.status === 'ON_TRIP') {
       const route = t.route_id ? await q1<any>('SELECT distance_km FROM routes WHERE id = :id', { id: t.route_id }, tx) : null;
-      const km = to === 'COMPLETED' && route ? Math.round(Number(route.distance_km) * 2) : 0;
+      const endOdo = to === 'COMPLETED' ? (p.odometerKm ?? (route ? Math.round((t.odometer_start ?? vehicle.odometer_km) + Number(route.distance_km) * 2) : vehicle.odometer_km)) : vehicle.odometer_km;
+      const km = Math.max(0, endOdo - vehicle.odometer_km);
       await exec(`UPDATE vehicles SET status = 'AVAILABLE', odometer_km = odometer_km + :km, last_lat = :lat, last_lng = :lng, last_location_id = :loc, last_speed_kmh = 0, last_position_at = now(), updated_at = now() WHERE id = :id`, { id: vehicle.id, km, lat: o.lat, lng: o.lng, loc: o.id }, tx);
     }
     if (driver && driver.status === 'ON_TRIP') await exec(`UPDATE drivers SET status = 'AVAILABLE', updated_at = now() WHERE id = :id`, { id: driver.id }, tx);
@@ -489,7 +510,7 @@ async function doTransition(tx: any, user: AuthUser | null, req: Request | undef
   if (to === 'DISPATCHED') {
     await notify({ ...base, type: 'TRIP_DISPATCHED', severity: 'INFO', title: `Trip ${t.code} dispatched`, body: msg, roles: AUDIENCE.OPS });
     if (driverUser) await notify({ ...base, userId: driverUser.id, type: 'TRIP_ASSIGNED', severity: 'INFO', title: `New trip ${t.code} assigned to you`, body: 'Complete the pre-trip safety check and start the trip when loaded.' });
-  } else if (to === 'COMPLETED') await notify({ ...base, type: 'TRIP_COMPLETED', severity: 'SUCCESS', title: `Trip ${t.code} completed`, body: msg, roles: AUDIENCE.OPS });
+  } else if (to === 'COMPLETED') { await notify({ ...base, type: 'TRIP_COMPLETED', severity: 'SUCCESS', title: `Trip ${t.code} completed`, body: msg, roles: AUDIENCE.OPS }); await postHooks.tripCompleted?.({ ...t, status: 'COMPLETED' }, tx); }
   else if (to === 'DELAYED') await notify({ ...base, type: 'TRIP_DELAYED', severity: 'WARNING', title: `Trip ${t.code} is delayed`, body: msg, roles: AUDIENCE.OPS });
   else if (to === 'CANCELLED') await notify({ ...base, type: 'TRIP_CANCELLED', severity: 'WARNING', title: `Trip ${t.code} cancelled`, body: p.reason, roles: AUDIENCE.OPS });
   else if (to === 'ON_HOLD') await notify({ ...base, type: 'TRIP_ON_HOLD', severity: 'WARNING', title: `Trip ${t.code} put on hold`, body: p.reason, roles: AUDIENCE.OPS });
@@ -531,7 +552,16 @@ export async function getTripDetail(id: number, user: AuthUser) {
     q<any>(`SELECT c.id, c.kind, c.result, c.items, c.notes, c.completed_at, u.full_name AS completed_by_name
               FROM safety_checks c LEFT JOIN users u ON u.id = c.completed_by WHERE c.trip_id = :id ORDER BY c.completed_at DESC`, { id }),
   ]);
-  return { trip: t, events, checks, actions: await tripActions(t, user) };
+  const canFin = can(user.role, 'finance:view');
+  const [expenses, fuel, econ] = await Promise.all([
+    q<any>(`SELECT x.id, x.category, x.amount, x.nights, x.description, x.receipt_no, x.incurred_on, x.status, x.decision_note, x.created_at, u.full_name AS submitted_by_name
+              FROM trip_expenses x LEFT JOIN users u ON u.id = x.submitted_by WHERE x.trip_id = :id ORDER BY x.created_at DESC`, { id }),
+    q<any>(`SELECT f.id, f.station, f.fueled_at, f.litres, f.rate_per_l, f.amount, f.odometer_km, f.kmpl, f.status, f.flag_reason FROM fuel_entries f WHERE f.trip_id = :id ORDER BY f.fueled_at DESC`, { id }),
+    tripEconomics(id),
+  ]);
+  if (!canFin) { delete t.freight_per_mt; delete t.bill_to_id; }
+  const economics = canFin ? econ : { expensesApproved: econ.expensesApproved, expensesPending: econ.expensesPending, km: econ.km };
+  return { trip: t, events, checks, expenses, fuel, economics, actions: await tripActions(t, user) };
 }
 
 export { AppError };

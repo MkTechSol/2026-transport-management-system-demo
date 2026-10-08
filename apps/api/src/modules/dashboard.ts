@@ -5,6 +5,7 @@ import { parse, wrap } from '../lib/http';
 import { TtlCache } from '../lib/cache';
 import { currentDocSql, localDate, TODAY_START } from '../lib/sql';
 import { requirePerm } from '../middleware/auth';
+import { can } from '@gasman/shared';
 
 export const dashboardRouter = Router();
 export const dashboardCache = new TtlCache<any>(4000);
@@ -100,7 +101,33 @@ async function build(plantId?: number) {
   };
 }
 
+const financeCache = new TtlCache<any>(4000);
+async function financeBlock(plantId?: number) {
+  const tp = plantId ? 'AND t.origin_location_id = :plant' : '';
+  const r = { plant: plantId ?? null };
+  const [m] = await q(`SELECT
+      COALESCE(sum(t.delivered_mt * t.freight_per_mt) FILTER (WHERE t.delivered_at >= date_trunc('month', now())), 0)::float AS income_mtd,
+      COALESCE(sum(t.delivered_mt * t.freight_per_mt) FILTER (WHERE t.delivered_at >= date_trunc('month', now()) - interval '1 month' AND t.delivered_at < date_trunc('month', now())), 0)::float AS income_prev
+    FROM trips t WHERE t.status IN ('DELIVERED','RETURNING','COMPLETED') ${tp}`, r);
+  const [e] = await q(`SELECT COALESCE(sum(x.amount) FILTER (WHERE x.status IN ('APPROVED','REIMBURSED') AND x.incurred_on >= date_trunc('month', now())), 0)::float AS expenses_mtd,
+      COALESCE(sum(x.amount) FILTER (WHERE x.status IN ('APPROVED','REIMBURSED') AND x.incurred_on >= date_trunc('month', now()) - interval '1 month' AND x.incurred_on < date_trunc('month', now())), 0)::float AS expenses_prev,
+      COALESCE(sum(x.amount) FILTER (WHERE x.status = 'SUBMITTED'), 0)::float AS pending_amount, count(*) FILTER (WHERE x.status = 'SUBMITTED')::int AS pending_count
+    FROM trip_expenses x JOIN trips t ON t.id = x.trip_id WHERE 1=1 ${tp}`, r);
+  const [fl] = await q(`SELECT count(*) FILTER (WHERE status = 'FLAGGED')::int AS flagged FROM fuel_entries`);
+  const daily = await q(`SELECT to_char(d, 'DD Mon') AS label, COALESCE(i.v, 0)::float AS income, COALESCE(x.v, 0)::float AS expenses
+      FROM generate_series(${localDate('now()')} - 13, ${localDate('now()')}, interval '1 day') d
+      LEFT JOIN (SELECT ${localDate('t.delivered_at')} AS dd, sum(t.delivered_mt * t.freight_per_mt) AS v FROM trips t WHERE t.delivered_at >= now() - interval '15 days' ${tp} GROUP BY 1) i ON i.dd = d::date
+      LEFT JOIN (SELECT e.incurred_on AS dd, sum(e.amount) AS v FROM trip_expenses e JOIN trips t ON t.id = e.trip_id WHERE e.status IN ('APPROVED','REIMBURSED') AND e.incurred_on >= CURRENT_DATE - 14 ${tp} GROUP BY 1) x ON x.dd = d::date
+      ORDER BY d`, r);
+  const profit = m.income_mtd - e.expenses_mtd;
+  return { incomeMtd: m.income_mtd, incomePrevMonth: m.income_prev, expensesMtd: e.expenses_mtd, expensesPrevMonth: e.expenses_prev, profitMtd: profit, marginPct: m.income_mtd > 0 ? Math.round((profit / m.income_mtd) * 1000) / 10 : null,
+    pendingExpenseAmount: e.pending_amount, pendingExpenseCount: e.pending_count, fuelFlagged: fl.flagged, daily };
+}
+
 dashboardRouter.get('/', requirePerm('dashboard:view'), wrap(async (req, res) => {
   const { plantId } = parse(z.object({ plantId: z.coerce.number().int().positive().optional() }), req.query);
-  res.json(await dashboardCache.get(`d:${plantId ?? 'all'}`, () => build(plantId)));
+  const base = await dashboardCache.get(`d:${plantId ?? 'all'}`, () => build(plantId));
+  // Money figures are role-gated and never stored in the shared (all-roles) cache entry.
+  if (can(req.user!.role, 'finance:view')) return res.json({ ...base, finance: await financeCache.get(`f:${plantId ?? 'all'}`, () => financeBlock(plantId)) });
+  res.json(base);
 }));

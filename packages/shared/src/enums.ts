@@ -5,6 +5,9 @@ export const ROLES = [
   'FLEET_MANAGER',
   'DRIVER',
   'MANAGEMENT_VIEWER',
+  'ACCOUNTANT',
+  'STORE_MANAGER',
+  'HR_MANAGER',
 ] as const;
 export type Role = (typeof ROLES)[number];
 
@@ -15,6 +18,9 @@ export const ROLE_LABELS: Record<Role, string> = {
   FLEET_MANAGER: 'Fleet Manager',
   DRIVER: 'Driver',
   MANAGEMENT_VIEWER: 'Management (Viewer)',
+  ACCOUNTANT: 'Accountant',
+  STORE_MANAGER: 'Store & Procurement Manager',
+  HR_MANAGER: 'HR Manager',
 };
 
 export const TRIP_STATUSES = [
@@ -56,7 +62,11 @@ export type DriverStatus = (typeof DRIVER_STATUSES)[number];
 
 export const FLEET_TYPES = ['OWNED', 'HIRED'] as const;
 export const VEHICLE_CATEGORIES = ['BOWZER', 'CYLINDER_TRUCK'] as const;
-export const LOCATION_TYPES = ['PLANT', 'TERMINAL', 'DEPOT', 'DISTRIBUTOR', 'PARKING'] as const;
+export const LOCATION_TYPES = ['PLANT', 'TERMINAL', 'DEPOT', 'DISTRIBUTOR', 'PARKING', 'FIELD'] as const;
+/** Locations LPG can be loaded from (plants, import terminals, depots and gas fields / uplift points). */
+export const LOADING_LOCATION_TYPES = ['PLANT', 'TERMINAL', 'DEPOT', 'FIELD'] as const;
+export const TRIP_TYPES = ['DELIVERY', 'UPLIFTING'] as const;
+export const CUSTOMER_TYPES = ['DISTRIBUTOR', 'MARKETER', 'OTHER'] as const;
 export const REGIONS = ['KPK', 'PUNJAB', 'AJK', 'GILGIT_BALTISTAN', 'ISLAMABAD', 'SINDH'] as const;
 export const LPG_SOURCES = ['LOCAL', 'IMPORTED'] as const;
 export const PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const;
@@ -85,3 +95,13 @@ export const MAINTENANCE_STATUSES = ['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'C
 export const INCIDENT_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export const INCIDENT_CATEGORIES = ['GAS_LEAK', 'ACCIDENT', 'BREAKDOWN', 'ROUTE_BLOCKED', 'DELAY', 'SECURITY', 'OTHER'] as const;
 export const INCIDENT_STATUSES = ['OPEN', 'INVESTIGATING', 'CLOSED'] as const;
+
+// ---------------- Trip economics (evidence: old system 'Trip Expense Voucher', 'Tour Stay Details', 'Fare / MT') ----------------
+export const EXPENSE_CATEGORIES = ['FUEL', 'TOLL', 'DRIVER_ALLOWANCE', 'TOUR_STAY', 'LOADING_UNLOADING', 'REPAIR', 'POLICE_ROAD', 'OTHER'] as const;
+export const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
+  FUEL: 'Fuel', TOLL: 'Toll / road tax', DRIVER_ALLOWANCE: 'Driver allowance', TOUR_STAY: 'Tour stay (halt)', LOADING_UNLOADING: 'Loading / unloading',
+  REPAIR: 'En-route repair', POLICE_ROAD: 'Road / police charges', OTHER: 'Other',
+};
+export const EXPENSE_STATUSES = ['SUBMITTED', 'APPROVED', 'REJECTED', 'REIMBURSED'] as const;
+export const FUEL_STATUSES = ['VALIDATED', 'FLAGGED', 'REVIEWED'] as const;
+export const PAYMENT_MODES = ['CASH', 'CARD', 'CREDIT'] as const;

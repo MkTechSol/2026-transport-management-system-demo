@@ -24,6 +24,12 @@ const body = z.object({
   defaultDriverId: z.coerce.number().int().positive().optional().nullable(),
   vendorName: z.string().trim().max(120).optional().nullable(),
   odometerKm: z.coerce.number().int().min(0).optional(),
+  bowzerNo: z.string().trim().max(30).optional().nullable(),
+  chassisNo: z.string().trim().max(40).optional().nullable(),
+  engineNo: z.string().trim().max(40).optional().nullable(),
+  wheels: z.coerce.number().int().min(4).max(30).optional().nullable(),
+  ownerName: z.string().trim().max(120).optional().nullable(),
+  fuelNormKmpl: z.coerce.number().min(0.5).max(12).optional(),
 });
 
 const SORTS = { code: 'v.code', capacity: 'v.capacity_mt', status: 'v.status', fleet: 'v.fleet_type', odometer: 'v.odometer_km', updated: 'v.updated_at' };
@@ -36,7 +42,7 @@ vehiclesRouter.get('/', requirePerm('vehicles:view'), wrap(async (req, res) => {
   }), req.query);
   const where: string[] = ['v.archived_at IS NULL'];
   const r: Record<string, unknown> = { lim: p.pageSize, off: p.offset };
-  if (p.q) { where.push('(v.code ILIKE :q OR v.registration_no ILIKE :q OR v.make ILIKE :q OR v.vendor_name ILIKE :q)'); r.q = likeTerm(p.q); }
+  if (p.q) { where.push('(v.code ILIKE :q OR v.registration_no ILIKE :q OR v.make ILIKE :q OR v.vendor_name ILIKE :q OR v.bowzer_no ILIKE :q OR v.owner_name ILIKE :q)'); r.q = likeTerm(p.q); }
   if (f.status) { where.push('v.status IN (:statuses)'); r.statuses = f.status.split(',').filter((s) => (VEHICLE_STATUSES as readonly string[]).includes(s)); }
   if (f.fleetType) { where.push('v.fleet_type = :ft'); r.ft = f.fleetType; }
   if (f.category) { where.push('v.category = :cat'); r.cat = f.category; }
@@ -50,7 +56,7 @@ vehiclesRouter.get('/', requirePerm('vehicles:view'), wrap(async (req, res) => {
   const [rows, [{ total }]] = await Promise.all([
     q(`SELECT v.id, v.code, v.registration_no, v.fleet_type, v.category, v.capacity_mt, v.make, v.model, v.year, v.status, v.odometer_km,
               v.home_plant_id, l.name AS home_plant_name, v.default_driver_id, dd.full_name AS default_driver_name, v.vendor_name,
-              v.last_lat, v.last_lng, v.last_speed_kmh, v.last_position_at, ll.name AS last_location_name,
+              v.last_lat, v.last_lng, v.last_speed_kmh, v.last_position_at, ll.name AS last_location_name, v.bowzer_no, v.owner_name,
               ct.id AS current_trip_id, ct.code AS current_trip_code, ct.status AS current_trip_status,
               docs.expired AS docs_expired, docs.expiring AS docs_expiring,
               mt.next_maintenance_on
@@ -112,11 +118,11 @@ vehiclesRouter.post('/', requirePerm('vehicles:create'), wrap(async (req, res) =
   const dup = await q1('SELECT 1 AS x FROM vehicles WHERE lower(registration_no) = lower(:r) OR lower(code) = lower(:c)', { r: b.registrationNo, c: b.code });
   if (dup) throw conflict('A vehicle with this fleet code or registration number already exists.');
   const row = await q1(
-    `INSERT INTO vehicles (code, registration_no, fleet_type, category, capacity_mt, make, model, year, status, home_plant_id, default_driver_id, vendor_name, odometer_km, last_lat, last_lng, last_location_id, last_position_at)
-     SELECT :code, :reg, :ft, :cat, :cap, :make, :model, :year, :status, :plant, :driver, :vendor, :odo, l.lat, l.lng, l.id, now()
+    `INSERT INTO vehicles (code, registration_no, fleet_type, category, capacity_mt, make, model, year, status, home_plant_id, default_driver_id, vendor_name, odometer_km, last_lat, last_lng, last_location_id, last_position_at, bowzer_no, chassis_no, engine_no, wheels, owner_name, fuel_norm_kmpl)
+     SELECT :code, :reg, :ft, :cat, :cap, :make, :model, :year, :status, :plant, :driver, :vendor, :odo, l.lat, l.lng, l.id, now(), :bz, :ch, :en, :wh, :ow, :fn
        FROM (SELECT 1) x LEFT JOIN locations l ON l.id = :plant RETURNING *`,
     { code: b.code.toUpperCase(), reg: b.registrationNo.toUpperCase(), ft: b.fleetType, cat: b.category, cap: b.capacityMt, make: b.make ?? null, model: b.model ?? null, year: b.year ?? null,
-      status: b.status ?? 'AVAILABLE', plant: b.homePlantId ?? null, driver: b.defaultDriverId ?? null, vendor: b.fleetType === 'HIRED' ? b.vendorName ?? null : null, odo: b.odometerKm ?? 0 },
+      status: b.status ?? 'AVAILABLE', plant: b.homePlantId ?? null, driver: b.defaultDriverId ?? null, vendor: b.fleetType === 'HIRED' ? b.vendorName ?? null : null, odo: b.odometerKm ?? 0, bz: b.bowzerNo ?? null, ch: b.chassisNo ?? null, en: b.engineNo ?? null, wh: b.wheels ?? null, ow: b.ownerName ?? null, fn: b.fuelNormKmpl ?? 2.6 },
   );
   await audit(req, { action: 'CREATE', entityType: 'VEHICLE', entityId: row.id, entityLabel: row.code });
   res.status(201).json({ vehicle: row });
@@ -136,7 +142,7 @@ vehiclesRouter.patch('/:id', requirePerm('vehicles:update'), wrap(async (req, re
     const dup = await q1('SELECT 1 AS x FROM vehicles WHERE id <> :id AND (lower(registration_no) = lower(:r) OR lower(code) = lower(:c))', { id: vid, r: b.registrationNo ?? '', c: b.code ?? '' });
     if (dup) throw conflict('A vehicle with this fleet code or registration number already exists.');
   }
-  const cols: Record<string, string> = { code: 'code', registrationNo: 'registration_no', fleetType: 'fleet_type', category: 'category', capacityMt: 'capacity_mt', make: 'make', model: 'model', year: 'year', status: 'status', homePlantId: 'home_plant_id', defaultDriverId: 'default_driver_id', vendorName: 'vendor_name', odometerKm: 'odometer_km' };
+  const cols: Record<string, string> = { code: 'code', registrationNo: 'registration_no', fleetType: 'fleet_type', category: 'category', capacityMt: 'capacity_mt', make: 'make', model: 'model', year: 'year', status: 'status', homePlantId: 'home_plant_id', defaultDriverId: 'default_driver_id', vendorName: 'vendor_name', odometerKm: 'odometer_km', bowzerNo: 'bowzer_no', chassisNo: 'chassis_no', engineNo: 'engine_no', wheels: 'wheels', ownerName: 'owner_name', fuelNormKmpl: 'fuel_norm_kmpl' };
   const sets: string[] = []; const r: Record<string, unknown> = { id: vid };
   for (const [k, c] of Object.entries(cols)) if ((b as any)[k] !== undefined) { sets.push(`${c} = :${c}`); r[c] = ['code', 'registrationNo'].includes(k) ? String((b as any)[k]).toUpperCase() : (b as any)[k]; }
   if (sets.length) await exec(`UPDATE vehicles SET ${sets.join(', ')}, updated_at = now() WHERE id = :id`, r);

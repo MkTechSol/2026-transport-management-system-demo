@@ -10,6 +10,9 @@ export const USERS = {
   fleet: 'fleet.manager@gasman-demo.local',
   driver: 'driver@gasman-demo.local',
   viewer: 'management@gasman-demo.local',
+  accountant: 'accountant@gasman-demo.local',
+  store: 'store.manager@gasman-demo.local',
+  hr: 'hr.manager@gasman-demo.local',
 };
 const cache = new Map<string, string>();
 export async function tokenFor(email: string): Promise<string> {

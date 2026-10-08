@@ -115,3 +115,7 @@ export function progressOnPath(path: LatLng[], p: LatLng): number {
   }
   return total === 0 ? 0 : before / total;
 }
+
+/** Demo freight tariff (PKR per MT per km) used to seed route rates; real rates come from GasMan's route definitions. */
+export const DEMO_FREIGHT_PER_MT_KM = 23;
+export const demoFreightPerMt = (distanceKm: number, jitter = 0) => Math.max(1500, Math.round(((distanceKm * DEMO_FREIGHT_PER_MT_KM + 400) * (1 + jitter)) / 50) * 50);

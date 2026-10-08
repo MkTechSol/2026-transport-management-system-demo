@@ -11,6 +11,11 @@ export const LOCATIONS: { code: string; name: string; type: string; city: string
   { code: 'TRM-PQI', name: 'Port Qasim Import Terminal (Demo)', type: 'TERMINAL', city: 'Karachi', region: 'SINDH', lat: 24.78, lng: 67.34, cap: 9000, address: 'Port Qasim, Karachi (demo import terminal)' },
   { code: 'DEP-PSH', name: 'Peshawar Depot (Demo)', type: 'DEPOT', city: 'Peshawar', region: 'KPK', lat: 33.99, lng: 71.57, cap: 400, address: 'Ring Road, Peshawar (demo)' },
   { code: 'DEP-LHR', name: 'Lahore Depot (Demo)', type: 'DEPOT', city: 'Lahore', region: 'PUNJAB', lat: 31.55, lng: 74.31, cap: 600, address: 'Ferozepur Road, Lahore (demo)' },
+  // Uplift sources and plants named in the legacy system screenshots (coordinates approximate, for the map demo only)
+  { code: 'FLD-NSH', name: 'Nashpa Field (uplift point)', type: 'FIELD', city: 'Karak', region: 'KPK', lat: 33.2, lng: 71.2, cap: 0, address: 'Nashpa, Karak District, KPK (approximate demo location)' },
+  { code: 'FLD-MKR', name: 'Makori Field (uplift point)', type: 'FIELD', city: 'Karak', region: 'KPK', lat: 33.1, lng: 71.35, cap: 0, address: 'Makori, Karak District, KPK (approximate demo location)' },
+  { code: 'PLT-SHP', name: 'Sher Palam Plant', type: 'PLANT', city: 'Kohat', region: 'KPK', lat: 33.62, lng: 71.28, cap: 1800, address: 'Sher Palam, KPK (approximate demo location)' },
+  { code: 'PLT-KTL', name: 'Kotal Plant Kohat', type: 'PLANT', city: 'Kohat', region: 'KPK', lat: 33.57, lng: 71.5, cap: 2100, address: 'Kotal, Kohat, KPK (approximate demo location)' },
 ];
 
 export interface DistSpec { name: string; city: string; region: string; at: [number, number]; contact: string }
@@ -62,6 +67,7 @@ export const VEHICLE_MAKES = [
   { make: 'Hino', model: '700 Series' }, { make: 'Isuzu', model: 'GXZ' }, { make: 'Mercedes-Benz', model: 'Actros 3340' },
   { make: 'Volvo', model: 'FM 400' }, { make: 'FAW', model: 'CA 3250' }, { make: 'Hyundai', model: 'HD 320' }, { make: 'Scania', model: 'P360' },
 ];
+export const PARTNER_OWNERS = ['Partner Alpha (Demo)', 'Partner Bravo (Demo)', 'Partner Charlie (Demo)'];
 export const HIRED_VENDORS = ['Indus Haulage (Demo)', 'Karakoram Carriers (Demo)', 'Margalla Transport Co. (Demo)'];
 export const MAINT_JOBS = [
   { type: 'PREVENTIVE', title: 'Periodic service (engine oil, filters)', cost: [28000, 52000] },

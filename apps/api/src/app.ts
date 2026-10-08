@@ -25,6 +25,12 @@ import { trackingRouter } from './modules/tracking';
 import { tripsRouter } from './modules/trips';
 import { usersRouter } from './modules/users';
 import { vehiclesRouter } from './modules/vehicles';
+import { routesRouter } from './modules/routes';
+import { expensesRouter } from './modules/expenses';
+import { fuelRouter } from './modules/fuel';
+import { approvalsRouter } from './modules/approvals';
+import { settingsRouter } from './modules/settings';
+import { publicRouter } from './modules/public';
 import { sequelize } from './db/sequelize';
 
 export function createApp() {
@@ -47,6 +53,7 @@ export function createApp() {
   api.use(rateLimit({ windowMs: 60_000, limit: config.RATE_LIMIT_API_PER_MIN, standardHeaders: true, legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many requests. Please slow down.' } } }));
   // CSRF: the API authenticates with bearer tokens (not cookies); the one cookie (refresh) is SameSite=Strict and path-scoped.
   api.use('/auth', authRouter);
+  api.use('/public', publicRouter);
   api.use(authenticate);
   // Any successful write invalidates cached dashboard aggregates so users never see stale counts after acting.
   api.use((req, res, next) => {
@@ -59,6 +66,11 @@ export function createApp() {
   api.use('/drivers', driversRouter);
   api.use('/locations', locationsRouter);
   api.use('/distributors', distributorsRouter);
+  api.use('/routes', routesRouter);
+  api.use('/expenses', expensesRouter);
+  api.use('/fuel', fuelRouter);
+  api.use('/approvals', approvalsRouter);
+  api.use('/settings', settingsRouter);
   api.use('/trips', tripsRouter);
   api.use('/tracking', trackingRouter);
   api.use('/maintenance', maintenanceRouter);

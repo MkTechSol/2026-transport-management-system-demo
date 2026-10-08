@@ -8,6 +8,10 @@ import {
   DEMO_PASSWORD, DISTRIBUTORS, HIRED_VENDORS, LOCATIONS, MAINT_JOBS, MAINT_VENDORS, PRETRIP_ITEMS, VEHICLE_MAKES, driverNames,
 } from './data';
 import { makeRng } from './rng';
+import { economicsPass } from './economics';
+import { demoFreightPerMt } from '../lib/geo';
+import { PARTNER_OWNERS } from './data';
+import { seedSettings } from '../services/settings';
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -23,6 +27,7 @@ export interface SeedSummary { users: number; vehicles: number; drivers: number;
 
 export async function truncateAll() {
   await sequelize.query(`TRUNCATE notification_reads, notifications, audit_logs, trip_positions, trip_events, safety_checks, incidents, maintenance_records, documents,
+    trip_expenses, fuel_entries, approvals, approval_rules, settings,
     trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
 }
 
@@ -44,9 +49,11 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   if (log) logger.info('seeding demo data…');
 
   // ---------------------------------------------------------------- locations & distributors
-  const locations: any[] = LOCATIONS.map((l, i) => ({ id: i + 1, code: l.code, name: l.name, type: l.type, city: l.city, region: l.region, address: l.address, lat: l.lat, lng: l.lng, storage_capacity_mt: l.cap, contact_phone: `051-555-01${10 + i}`, status: 'ACTIVE' }));
+  const locations: any[] = LOCATIONS.map((l, i) => ({ id: i + 1, code: l.code, name: l.name, type: l.type, city: l.city, region: l.region, address: l.address, lat: l.lat, lng: l.lng, storage_capacity_mt: l.cap || null, contact_phone: `051-555-01${10 + i}`, status: 'ACTIVE' }));
   const plants = locations.filter((l) => l.type === 'PLANT');
   const osk = locations[0]; const dhn = locations[1]; const pqi = locations[2];
+  const nashpa = locations[5]; const makori = locations[6]; const sher = locations[7]; const kotal = locations[8];
+  const CUST_NTN = (i: number) => `DEMO-NTN-${String(7000000 + i * 137).slice(-7)}-${i % 9}`;
   const distributors: any[] = [];
   DISTRIBUTORS.forEach((d, i) => {
     const locId = locations.length + 1;
@@ -56,10 +63,19 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
       id: i + 1, code, name: d.name, city: d.city, region: d.region, address: `Main Road, ${d.city} (synthetic demo address)`, contact_name: d.contact,
       phone: `0300-555${String(1000 + i * 37).slice(-4)}`, location_id: locId,
       status: i === 11 ? 'ON_HOLD' : 'ACTIVE', credit_status: i === 11 ? 'BLOCKED' : i % 9 === 4 ? 'WATCH' : 'GOOD',
+      customer_type: 'DISTRIBUTOR', credit_limit_pkr: [1_500_000, 2_500_000, 4_000_000, 6_000_000][i % 4], credit_alert_pct: 80, whatsapp: `0300-555${String(3000 + i * 41).slice(-4)}`, email: `accounts${i + 1}@demo-distributor.example`, ntn: CUST_NTN(i),
     });
   });
+  // Marketers are billed for plant-to-plant uplifting freight (they never appear as delivery destinations).
+  const marketers: any[] = [];
+  ['Demo LPG Marketing Co. (Marketer)', 'Demo Energy Marketing Ltd. (Marketer)'].forEach((name, i) => {
+    const locId = locations.length + 1;
+    locations.push({ id: locId, code: `LOC-DEMO-MKT-${i + 1}`, name, type: 'DISTRIBUTOR', city: 'Islamabad', region: 'ISLAMABAD', address: 'Blue Area, Islamabad (synthetic)', lat: 33.71 + i * 0.01, lng: 73.06, storage_capacity_mt: null as any, contact_phone: `051-555-02${i}0`, status: 'ACTIVE' });
+    marketers.push({ id: DISTRIBUTORS.length + i + 1, code: `DEMO-MKT-${String(i + 1).padStart(3, '0')}`, name, city: 'Islamabad', region: 'ISLAMABAD', address: 'Blue Area, Islamabad (synthetic)', contact_name: i ? 'Operations Desk' : 'Commercial Desk', phone: `051-555-02${i}0`, location_id: locId,
+      status: 'ACTIVE', credit_status: 'GOOD', customer_type: 'MARKETER', credit_limit_pkr: 25_000_000, credit_alert_pct: 85, whatsapp: null, email: `billing${i + 1}@demo-marketer.example`, ntn: CUST_NTN(90 + i) });
+  });
   await bulk('locations', locations);
-  await bulk('distributors', distributors);
+  await bulk('distributors', [...distributors, ...marketers]);
 
   // ---------------------------------------------------------------- routes (lazy, synthetic)
   const routes = new Map<string, any>();
@@ -69,7 +85,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     if (!r) {
       const o = locations.find((l) => l.id === originId)!; const d = locations.find((l) => l.id === destId)!;
       const built = buildSyntheticRoute([o.lat, o.lng], [d.lat, d.lng], originId * 31 + destId);
-      r = { id: routes.size + 1, code: `RT-${o.code}-${d.code}`.slice(0, 40), origin_location_id: originId, destination_location_id: destId, distance_km: built.distanceKm, est_duration_min: built.estDurationMin, path: built.path, checkpoints: built.checkpoints };
+      r = { id: routes.size + 1, code: `RT-${o.code}-${d.code}`.slice(0, 40), origin_location_id: originId, destination_location_id: destId, distance_km: built.distanceKm, est_duration_min: built.estDurationMin, path: built.path, checkpoints: built.checkpoints, freight_per_mt: demoFreightPerMt(built.distanceKm, ((originId * 7 + destId * 3) % 9 - 4) / 100), name: `${o.name} – ${d.name}`.slice(0, 150), active: true };
       routes.set(key, r);
     }
     return r;
@@ -96,6 +112,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
       id: n, code: `GAS-BZ-${String(n).padStart(3, '0')}`, registration_no: `DEM-${1000 + n * 7}`, fleet_type: hired ? 'HIRED' : 'OWNED', category: 'BOWZER',
       capacity_mt: [10, 12, 15, 18, 20, 22][i % 6], make: mk.make, model: mk.model, year: hired ? rng.int(2015, 2020) : rng.int(2017, 2024),
       status: 'AVAILABLE', home_plant_id: i % 2 === 0 ? osk.id : dhn.id, default_driver_id: n <= 26 ? n : null, vendor_name: hired ? HIRED_VENDORS[(n - 21) % 3] : null,
+      bowzer_no: `B-${100 + n * 3}`, chassis_no: `DEMO-CH-${String(900000 + n * 311)}`, engine_no: `DEMO-EN-${String(15000 + n * 17)}`, wheels: [10, 12, 14][i % 3], owner_name: hired ? HIRED_VENDORS[(n - 21) % 3] : n % 7 === 0 ? PARTNER_OWNERS[0] : n % 7 === 3 ? PARTNER_OWNERS[1] : n % 7 === 5 ? PARTNER_OWNERS[2] : 'GasMan (Company)', fuel_norm_kmpl: [2.5, 2.6, 2.7, 2.8, 2.4, 2.9][i % 6],
       odometer_km: rng.int(60_000, 460_000), last_lat: null as any, last_lng: null as any, last_speed_kmh: 0, last_position_at: null as any, last_location_id: null as any,
       archived_at: null as any, created_at: at(-60 * 24 * 250), updated_at: at(-60 * 24),
     };
@@ -141,7 +158,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   const driverUserId = 5; const DISPATCHER = 3; const TM = 2;
   const vBusy = new Map<number, number>(); const dBusy = new Map<number, number>();
   const pool = (used: Set<number>) => vehicles.filter((v) => !RESERVED.has(v.id) && !used.has(v.id));
-  const nearestPlant = (d: any) => (haversineKm([osk.lat, osk.lng], [d.lat, d.lng]) <= haversineKm([dhn.lat, dhn.lng], [d.lat, d.lng]) ? osk : dhn);
+  const nearestPlant = (d: any) => [osk, dhn, sher, kotal].reduce((b, p) => (haversineKm([p.lat, p.lng], [d.lat, d.lng]) < haversineKm([b.lat, b.lng], [d.lat, d.lng]) ? p : b));
   const distLoc = (dist: any) => locations.find((l) => l.id === dist.location_id)!;
   const loadFor = (v: any) => Math.round(v.capacity_mt * rng.float(0.86, 0.99) * 10) / 10;
   const CHECK_ITEMS = (ok = true, failKey?: string) => PRETRIP_ITEMS.map((it) => ({ ...it, ok: failKey ? it.key !== failKey : ok }));
@@ -159,13 +176,15 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   const histVehicles = vehicles.filter((v) => v.id !== 26);
   let imported = 0;
   for (let day = -90; day <= -1; day++) {
-    const k = rng.chance(0.93) ? (rng.chance(0.14) ? 2 : 1) : 0;
+    const k = rng.chance(0.96) ? rng.int(1, 3) : 0;
     for (let j = 0; j < k; j++) {
+      const isUplift = rng.chance(0.28);
       const dist = distributors[(rng.int(0, distributors.length - 1) * 5 + rng.int(0, 3)) % distributors.length];
-      const dl = distLoc(dist);
-      const useImport = imported < 2 && (day === -38 || day === -12) && j === 0;
-      const origin = useImport ? pqi : nearestPlant(dl);
-      const destDist = useImport ? distributors.find((d) => d.city === 'Lahore')! : dist;
+      const upPlant = rng.pick([osk, sher, kotal]);
+      const dl = isUplift ? upPlant : distLoc(dist);
+      const useImport = !isUplift && imported < 2 && (day === -38 || day === -12) && j === 0;
+      const origin = isUplift ? rng.pick([nashpa, makori]) : useImport ? pqi : nearestPlant(dl);
+      const destDist = isUplift ? { id: null as any, contact_name: 'Plant receiving officer', name: upPlant.name } : useImport ? distributors.find((d) => d.city === 'Lahore')! : dist;
       const destLoc = useImport ? distLoc(destDist) : dl;
       if (useImport) imported++;
       const dep = dayAt(day, rng.int(5, 14), rng.pick([0, 15, 30, 45]));
@@ -373,6 +392,9 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   });
   // strip helper field
   trips.forEach((t) => delete t.__checkAt);
+  // Phase A: trip economics, odometers, fuel, expenses, approvals
+  const routesById = new Map<number, any>([...routes.values()].map((r) => [r.id, r]));
+  const econ = economicsPass({ trips, vehicles, routesById, locations, marketerIds: marketers.map((m) => m.id), rng, NOW, autoLimit: 5000 });
 
   // vehicle / driver live state
   const execSet = new Set(['DISPATCHED', 'IN_TRANSIT', 'DELAYED', 'ON_HOLD', 'ARRIVED', 'DELIVERED', 'RETURNING']);
@@ -433,6 +455,9 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     { id: 5, email: 'driver@gasman-demo.local', full_name: driverAccountDriver.full_name, role: 'DRIVER', driver_id: driverAccountDriver.id },
     { id: 6, email: 'management@gasman-demo.local', full_name: 'Saleem Qureshi', role: 'MANAGEMENT_VIEWER', driver_id: null },
     { id: 7, email: 'dispatcher2@gasman-demo.local', full_name: 'Hina Farooq', role: 'DISPATCHER', driver_id: null },
+    { id: 8, email: 'accountant@gasman-demo.local', full_name: 'Rukhsana Iqbal', role: 'ACCOUNTANT', driver_id: null },
+    { id: 9, email: 'store.manager@gasman-demo.local', full_name: 'Naveed Anjum', role: 'STORE_MANAGER', driver_id: null },
+    { id: 10, email: 'hr.manager@gasman-demo.local', full_name: 'Saima Aslam', role: 'HR_MANAGER', driver_id: null },
   ].map((u) => ({ ...u, password_hash: hash, phone: `0300-555${String(9000 + u.id)}`, status: 'ACTIVE', failed_logins: 0, locked_until: null, last_login_at: at(-60 * 3 * u.id), created_at: at(-60 * 24 * 200), updated_at: at(-60 * 24 * 200) }));
 
   // ---------------------------------------------------------------- persist
@@ -444,6 +469,19 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   await bulk('documents', documents);
   await bulk('maintenance_records', maint);
   await bulk('trips', trips);
+  await bulk('fuel_entries', econ.fuel);
+  await bulk('trip_expenses', econ.expenses);
+  await bulk('approvals', econ.approvals);
+  await bulk('approval_rules', [
+    { id: 1, entity_type: 'TRIP_EXPENSE', min_amount: 0, approver_role: 'TRANSPORT_MANAGER', active: true, note: 'Expenses above the auto-approval limit' },
+    { id: 2, entity_type: 'TRIP_EXPENSE', min_amount: 50000, approver_role: 'SUPER_ADMIN', active: true, note: 'High-value expenses' },
+    { id: 3, entity_type: 'PURCHASE_REQUISITION', min_amount: 0, approver_role: 'TRANSPORT_MANAGER', active: true, note: null },
+    { id: 4, entity_type: 'PURCHASE_ORDER', min_amount: 0, approver_role: 'TRANSPORT_MANAGER', active: true, note: null },
+    { id: 5, entity_type: 'PURCHASE_ORDER', min_amount: 250000, approver_role: 'SUPER_ADMIN', active: true, note: 'Large purchases' },
+    { id: 6, entity_type: 'LEAVE', min_amount: 0, approver_role: 'HR_MANAGER', active: true, note: null },
+    { id: 7, entity_type: 'PAYROLL', min_amount: 0, approver_role: 'SUPER_ADMIN', active: true, note: 'Monthly payroll run' },
+  ]);
+  await seedSettings();
   await bulk('trip_events', events);
   await bulk('safety_checks', checks);
   await bulk('trip_positions', positions);
@@ -494,6 +532,10 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     SELECT setval(pg_get_serial_sequence('maintenance_records','id'), (SELECT max(id) FROM maintenance_records));
     SELECT setval(pg_get_serial_sequence('audit_logs','id'), (SELECT max(id) FROM audit_logs));
     SELECT setval(pg_get_serial_sequence('notifications','id'), (SELECT max(id) FROM notifications));
+    SELECT setval(pg_get_serial_sequence('fuel_entries','id'), (SELECT GREATEST(max(id),1) FROM fuel_entries));
+    SELECT setval(pg_get_serial_sequence('trip_expenses','id'), (SELECT GREATEST(max(id),1) FROM trip_expenses));
+    SELECT setval(pg_get_serial_sequence('approvals','id'), (SELECT GREATEST(max(id),1) FROM approvals));
+    SELECT setval(pg_get_serial_sequence('approval_rules','id'), (SELECT max(id) FROM approval_rules));
     SELECT setval('trip_code_seq', ${trips.length});
     SELECT setval('incident_code_seq', ${incidents.length});`);
   await generateComplianceAlerts();

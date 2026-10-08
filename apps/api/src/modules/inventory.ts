@@ -149,7 +149,7 @@ inventoryRouter.get('/docs/:id', requirePerm('inventory:view'), wrap(async (req,
 const holder = z.object({ type: z.enum(['WAREHOUSE', 'VEHICLE']), id: z.coerce.number().int().positive() });
 const docBody = z.object({
   type: z.enum(['OPENING', 'PURCHASE', 'PURCHASE_RETURN', 'NAVIGATION', 'PARTS_REPLACEMENT', 'ISSUE', 'ADJUSTMENT']), date: dateStr.optional(), from: holder.nullish(), to: holder.nullish(),
-  vehicleId: z.coerce.number().int().positive().nullish(), vendorId: z.coerce.number().int().positive().nullish(), poId: z.coerce.number().int().positive().nullish(), payMode: z.enum(['CREDIT', 'CASH', 'BANK']).optional(), bankId: z.coerce.number().int().positive().nullish(),
+  vehicleId: z.coerce.number().int().positive().nullish(), vendorId: z.coerce.number().int().positive().nullish(), poId: z.coerce.number().int().positive().nullish(), payMode: z.enum(['CREDIT', 'CASH', 'BANK']).optional(), bankId: z.coerce.number().int().positive().nullish(), maintenanceId: z.coerce.number().int().positive().nullish(),
   narration: z.string().trim().max(300).optional(),
   lines: z.array(z.object({ itemId: z.coerce.number().int().positive(), qty: z.coerce.number(), unitCost: z.coerce.number().min(0).optional(), serialNo: z.string().trim().max(60).optional(), position: z.string().trim().max(12).optional(),
     removeItemId: z.coerce.number().int().positive().optional(), removeQty: z.coerce.number().positive().optional(), removeSerialNo: z.string().trim().max(60).optional(), removeDisposition: z.enum(['SCRAP', 'RETURN', 'RETREAD']).optional(), reason: z.string().trim().max(250).optional() })).min(1).max(60),

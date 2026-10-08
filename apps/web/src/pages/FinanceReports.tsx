@@ -9,11 +9,12 @@ import { AccountSelect, BowzerSelect, ReportTable, today } from '../features/fin
 import { DistributorPicker } from '../features/common';
 import { VoucherDrawer } from './Vouchers';
 
-export const FINANCE_REPORT_GROUPS: { title: string; items: { key: string; label: string; needs?: ('account' | 'bowzer' | 'party')[]; dates?: 'range' | 'asOf' | 'none' }[] }[] = [
+export const FINANCE_REPORT_GROUPS: { title: string; items: { key: string; label: string; href?: string; needs?: ('account' | 'bowzer' | 'party')[]; dates?: 'range' | 'asOf' | 'none' }[] }[] = [
   { title: 'Books', items: [
     { key: 'daybook', label: 'Day book', dates: 'range' }, { key: 'cash-book', label: 'Cash book', dates: 'range' }, { key: 'ledger', label: 'Account / bowzer / party ledger', needs: ['account', 'bowzer', 'party'], dates: 'range' }, { key: 'trial-balance', label: 'Trial balance', dates: 'range' }, { key: 'chart-of-accounts', label: 'Chart of accounts', dates: 'none' } ] },
   { title: 'Statements', items: [{ key: 'profit-loss', label: 'Profit & loss', needs: ['bowzer'], dates: 'range' }, { key: 'balance-sheet', label: 'Balance sheet', dates: 'asOf' }, { key: 'cash-flow', label: 'Cash flow', dates: 'range' }, { key: 'expense-report', label: 'Expense report', needs: ['bowzer'], dates: 'range' }] },
-  { title: 'Bowzers', items: [{ key: 'bowzer-pnl', label: 'Bowzer profit & loss', dates: 'range' }] },
+  { title: 'Bowzers & routes', items: [{ key: 'bowzer-pnl', label: 'Bowzer profit & loss', dates: 'range' }, { key: 'route-pnl', label: 'Route profit & loss', dates: 'range' }] },
+  { title: 'Voucher registers', items: [{ key: 'reg-cp', label: 'Cash payment vouchers', href: '/finance/vouchers?type=CASH_PAYMENT' }, { key: 'reg-cr', label: 'Cash receipt vouchers', href: '/finance/vouchers?type=CASH_RECEIPT' }, { key: 'reg-bp', label: 'Bank payment vouchers', href: '/finance/vouchers?type=BANK_PAYMENT' }, { key: 'reg-br', label: 'Bank receive vouchers', href: '/finance/vouchers?type=BANK_RECEIVE' }, { key: 'reg-jv', label: 'Journal vouchers', href: '/finance/vouchers?type=JOURNAL' }, { key: 'reg-bev', label: 'Bowzer expense vouchers', href: '/finance/vouchers?type=BOWZER_EXPENSE' }, { key: 'reg-inv', label: 'Sale invoices', href: '/sales/invoices' }] },
   { title: 'Receivables & payables', items: [{ key: 'receivable-aging', label: 'Receivable aging', dates: 'asOf' }, { key: 'invoice-aging', label: 'Invoice aging', dates: 'asOf' }, { key: 'payables', label: 'Payables by vendor', dates: 'asOf' }, { key: 'bank-balances', label: 'Bank balances', dates: 'asOf' }, { key: 'monthly-sales', label: 'Monthly sales', dates: 'range' }] },
 ];
 
@@ -32,7 +33,7 @@ export default function FinanceReports() {
       <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
         <nav aria-label="Report list" className="space-y-4">
           {FINANCE_REPORT_GROUPS.map((g) => <div key={g.title}><p className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{g.title}</p>
-            {g.items.map((i) => <button key={i.key} onClick={() => nav(`/finance/reports/${i.key}`)} className={clsx('block w-full rounded-lg px-3 py-2 text-left text-sm', i.key === def.key ? 'bg-brand-50 font-semibold text-brand-700' : 'hover:bg-slate-100')}>{i.label}</button>)}</div>)}
+            {g.items.map((i) => <button key={i.key} onClick={() => nav(i.href ?? `/finance/reports/${i.key}`)} className={clsx('block w-full rounded-lg px-3 py-2 text-left text-sm', i.key === def.key ? 'bg-brand-50 font-semibold text-brand-700' : 'hover:bg-slate-100')}>{i.label}</button>)}</div>)}
         </nav>
         <div className="min-w-0">
           <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-line bg-white p-3 print:hidden">

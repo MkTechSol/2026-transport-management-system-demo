@@ -13,7 +13,7 @@ export interface StockLineInput {
 export type StockDocType = 'OPENING' | 'PURCHASE' | 'PURCHASE_RETURN' | 'NAVIGATION' | 'PARTS_REPLACEMENT' | 'ISSUE' | 'ADJUSTMENT';
 export interface StockDocInput {
   type: StockDocType; date?: string; from?: Holder | null; to?: Holder | null; vehicleId?: number | null; vendorId?: number | null; poId?: number | null;
-  payMode?: 'CREDIT' | 'CASH' | 'BANK'; bankId?: number | null; narration?: string; lines: StockLineInput[];
+  payMode?: 'CREDIT' | 'CASH' | 'BANK'; bankId?: number | null; maintenanceId?: number | null; narration?: string; lines: StockLineInput[];
 }
 
 export const STOCK_DOC_LABELS: Record<StockDocType, string> = {
@@ -125,9 +125,9 @@ export async function postStockDoc(user: AuthUser | null, req: any, input: Stock
 
   const seq = await q1<{ n: number }>(`SELECT nextval('stock_doc_seq')::int AS n`, {}, tx);
   const docNo = `${PREFIX[t]}-${date.slice(2, 4)}-${String(seq!.n).padStart(5, '0')}`;
-  const doc = await q1<any>(`INSERT INTO stock_docs (doc_no, type, doc_date, from_type, from_id, to_type, to_id, vehicle_id, vendor_id, po_id, pay_mode, narration, created_by)
-    VALUES (:no, :t, :d, :ft, :fid, :tt, :tid, :veh, :ven, :po, :pm, :n, :u) RETURNING *`,
-    { no: docNo, t, d: date, ft: from?.type ?? null, fid: from?.id ?? null, tt: to?.type ?? null, tid: to?.id ?? null, veh: veh?.id ?? (to?.type === 'VEHICLE' ? to.id : from?.type === 'VEHICLE' ? from.id : null), ven: vendor?.id ?? null, po: input.poId ?? null, pm: input.payMode ?? null, n: input.narration ?? null, u: user?.id ?? null }, tx);
+  const doc = await q1<any>(`INSERT INTO stock_docs (doc_no, type, doc_date, from_type, from_id, to_type, to_id, vehicle_id, vendor_id, po_id, pay_mode, narration, created_by, maintenance_id)
+    VALUES (:no, :t, :d, :ft, :fid, :tt, :tid, :veh, :ven, :po, :pm, :n, :u, :mi) RETURNING *`,
+    { no: docNo, t, d: date, ft: from?.type ?? null, fid: from?.id ?? null, tt: to?.type ?? null, tid: to?.id ?? null, veh: veh?.id ?? (to?.type === 'VEHICLE' ? to.id : from?.type === 'VEHICLE' ? from.id : null), ven: vendor?.id ?? null, po: input.poId ?? null, pm: input.payMode ?? null, n: input.narration ?? null, u: user?.id ?? null, mi: input.maintenanceId ?? null }, tx);
 
   const gl: LineInput[] = []; let total = 0; let n = 1;
   const costsByItem = new Map<number, number>();

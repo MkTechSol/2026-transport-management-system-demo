@@ -37,9 +37,9 @@ function HolderSelect({ label, value, onChange, allow, error }: { label: string;
 }
 
 /** One form for every stock voucher: purchase, purchase return, navigation (transfer), parts replacement, issue, adjustment. F10 saves. */
-export function StockVoucherModal({ type, onClose, onSaved, preset }: { type: (typeof NEW_STOCK_TYPES)[number] | 'OPENING'; onClose: () => void; onSaved?: (d: any) => void; preset?: Partial<{ vehicleId: string; fromId: string }> }) {
+export function StockVoucherModal({ type, onClose, onSaved, preset }: { type: (typeof NEW_STOCK_TYPES)[number] | 'OPENING'; onClose: () => void; onSaved?: (d: any) => void; preset?: Partial<{ vehicleId: string; fromId: string; maintenanceId: number; note: string }> }) {
   const vendors = useVendors(); const banks = useBanks(); const allItems = useItems(); const veh = useVehicleOptions(); const wh = useWarehouses();
-  const [f, setF] = useState({ date: today(), narration: '', vendorId: '', payMode: 'CREDIT', bankId: '', vehicleId: preset?.vehicleId ?? '' });
+  const [f, setF] = useState({ date: today(), narration: preset?.note ?? '', vendorId: '', payMode: 'CREDIT', bankId: '', vehicleId: preset?.vehicleId ?? '' });
   const [from, setFrom] = useState<HolderSel>({ type: 'WAREHOUSE', id: preset?.fromId ?? '' });
   const [to, setTo] = useState<HolderSel>({ type: type === 'NAVIGATION' ? 'VEHICLE' : 'WAREHOUSE', id: '' });
   const [lines, setLines] = useState<Line[]>([blank()]);
@@ -51,7 +51,7 @@ export function StockVoucherModal({ type, onClose, onSaved, preset }: { type: (t
   const catalog: any[] = buying ? allItems.data?.data ?? [] : avail.data?.data ?? [];
   const itemOf = (id: string) => (allItems.data?.data ?? []).find((i: any) => String(i.id) === id) ?? catalog.find((i: any) => String(i.id) === id);
   const body = () => ({
-    type, date: f.date, narration: f.narration || undefined,
+    type, date: f.date, narration: f.narration || undefined, maintenanceId: preset?.maintenanceId,
     ...(type === 'NAVIGATION' ? { from: { type: from.type, id: Number(from.id) }, to: { type: to.type, id: Number(to.id) } } : {}),
     ...(buying ? { to: { type: 'WAREHOUSE', id: Number(to.id) } } : {}),
     ...(['PURCHASE_RETURN', 'ISSUE', 'ADJUSTMENT', 'PARTS_REPLACEMENT'].includes(type) ? { from: { type: 'WAREHOUSE', id: Number(from.id) } } : {}),

@@ -38,6 +38,7 @@ const Vouchers = lazy(() => import('./pages/Vouchers'));
 const FinanceReports = lazy(() => import('./pages/FinanceReports'));
 const Accounts = lazy(() => import('./pages/Accounts'));
 const Invoices = lazy(() => import('./pages/Invoices'));
+const InvoicePrintBatch = lazy(() => import('./pages/Invoices').then((m) => ({ default: m.InvoicePrintBatch })));
 const Customers = lazy(() => import('./pages/Customers'));
 const Vendors = lazy(() => import('./pages/Vendors'));
 const SetupHub = lazy(() => import('./pages/SetupHub'));
@@ -98,6 +99,7 @@ export default function App() {
             <Route path="approvals" element={P(['approvals:view'], <Approvals />)} />
             <Route path="routes" element={P(['routes:view'], <RoutesPage />)} />
             <Route path="customers" element={P(['sales:view', 'distributors:view'], <Customers />)} />
+            <Route path="sales/print" element={P(['sales:view'], <InvoicePrintBatch />)} />
             <Route path="sales/invoices" element={P(['sales:view'], <Invoices />)} />
             <Route path="finance/vouchers" element={P(['finance:view'], <Vouchers />)} />
             <Route path="finance/reports" element={<Navigate to="/finance/reports/daybook" replace />} />

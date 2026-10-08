@@ -72,6 +72,14 @@ export default function ControlTower() {
                 {data.finance.creditWatch.length ? <ul className="space-y-2 text-sm">{data.finance.creditWatch.map((c: any) => <li key={c.id}><Link to={`/distributors/${c.id}`} className="flex justify-between gap-3 hover:underline"><span className="truncate">{c.name}</span><span className={c.pct >= 100 ? 'font-semibold text-red-600' : 'font-semibold text-amber-600'}>{c.pct}%</span></Link></li>)}</ul> : <p className="text-sm text-slate-500">All customers are within their credit limits.</p>}</Section>
             </div>
           )}
+          {(data?.inventory || data?.activity?.length > 0) && (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {data.activity?.length > 0 && <Section title="Recent trip activity" subtitle="Latest status changes across the fleet" padded={false}>
+                <ul className="divide-y divide-line">{data.activity.map((a: any, i: number) => <li key={i}><Link to={`/trips/${a.trip_id}`} className="flex items-start justify-between gap-3 px-4 py-2.5 text-sm hover:bg-brand-50/50"><span><span className="font-medium text-brand-700">{a.code}</span>{a.vehicle ? ` · ${a.vehicle}` : ''}<span className="block text-xs text-slate-500">{a.message}</span></span><span className="shrink-0 text-xs text-slate-400">{timeAgo(a.occurred_at)}</span></Link></li>)}</ul></Section>}
+              {data.inventory && <Section title="Low stock" subtitle={`${data.inventory.lowStockCount} item(s) at or below minimum`} actions={<Link to="/inventory?low=1" className="text-sm font-medium text-brand-700 hover:underline">All</Link>}>
+                {data.inventory.lowStock.length ? <ul className="space-y-2 text-sm">{data.inventory.lowStock.map((i: any) => <li key={i.id} className="flex items-center justify-between gap-3"><span className="truncate">{i.name}</span><span className={`shrink-0 tabular-nums font-semibold ${i.qty <= i.min / 2 ? 'text-red-600' : 'text-amber-600'}`}>{i.qty} / {i.min}</span></li>)}</ul> : <p className="text-sm text-slate-500">Everything is above its minimum level.</p>}</Section>}
+            </div>
+          )}
           <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
             <Section title="Live trip operations" subtitle="Current movement and assignment status" padded={false} actions={<Link to="/trips?scope=active" className="text-sm font-medium text-brand-700 hover:underline">View all trips</Link>}>
               <div className="overflow-x-auto">

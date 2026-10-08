@@ -134,10 +134,19 @@ async function financeBlock(plantId?: number) {
     pendingExpenseAmount: e.pending_amount, pendingExpenseCount: e.pending_count, fuelFlagged: fl.flagged, daily };
 }
 
+async function inventoryBlock() {
+  const lowStock = await q(`SELECT i.id, i.code, i.name, COALESCE(sum(s.qty), 0)::float AS qty, i.min_level::float AS min FROM items i LEFT JOIN stock_balances s ON s.item_id = i.id AND s.holder_type = 'WAREHOUSE' WHERE i.active AND i.min_level > 0 GROUP BY i.id HAVING COALESCE(sum(s.qty), 0) <= i.min_level ORDER BY COALESCE(sum(s.qty), 0) / i.min_level LIMIT 6`);
+  const [c] = await q(`SELECT count(*)::int AS n FROM (SELECT i.id FROM items i LEFT JOIN stock_balances s ON s.item_id = i.id AND s.holder_type = 'WAREHOUSE' WHERE i.active AND i.min_level > 0 GROUP BY i.id HAVING COALESCE(sum(s.qty), 0) <= i.min_level) x`);
+  return { lowStock, lowStockCount: c.n };
+}
+
 dashboardRouter.get('/', requirePerm('dashboard:view'), wrap(async (req, res) => {
   const { plantId } = parse(z.object({ plantId: z.coerce.number().int().positive().optional() }), req.query);
   const base = await dashboardCache.get(`d:${plantId ?? 'all'}`, () => build(plantId));
   // Money figures are role-gated and never stored in the shared (all-roles) cache entry.
-  if (can(req.user!.role, 'finance:view')) return res.json({ ...base, finance: await financeCache.get(`f:${plantId ?? 'all'}`, () => financeBlock(plantId)) });
-  res.json(base);
+  const extra: Record<string, unknown> = {};
+  extra.activity = await financeCache.get('act', () => q(`SELECT e.occurred_at, e.type, e.message, t.id AS trip_id, t.code, v.code AS vehicle FROM trip_events e JOIN trips t ON t.id = e.trip_id LEFT JOIN vehicles v ON v.id = t.vehicle_id WHERE e.type NOT IN ('CHECKPOINT') ORDER BY e.occurred_at DESC, e.id DESC LIMIT 8`));
+  if (can(req.user!.role, 'inventory:view')) extra.inventory = await financeCache.get('inv', () => inventoryBlock() as any);
+  if (can(req.user!.role, 'finance:view')) extra.finance = await financeCache.get(`f:${plantId ?? 'all'}`, () => financeBlock(plantId));
+  res.json({ ...base, ...extra });
 }));

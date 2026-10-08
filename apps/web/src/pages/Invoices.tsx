@@ -1,7 +1,7 @@
 import { Banknote, FilePlus2, Plus, Printer, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate } from '../lib/format';
@@ -59,6 +59,24 @@ export function InvoiceModal({ customer, onClose, onSaved }: { customer?: any; o
   );
 }
 
+
+export function InvoiceSheet({ data, onVoucher }: { data: any; onVoucher?: (id: number) => void }) {
+  const inv = data.invoice;
+  return (
+    <div className="space-y-5">
+          <div className="flex items-start justify-between"><div><p className="text-lg font-bold">GasMan Private Limited</p><p className="text-xs text-slate-500">LPG bowzer transport — demo document, synthetic data</p></div><div className="text-right"><p className="text-sm font-semibold">{inv.kind === 'RETURN' ? 'CREDIT NOTE' : 'SALES INVOICE'}</p><p className="text-sm">{inv.invoice_no}</p><StatusPill status={inv.status} /></div></div>
+          <KVGrid cols={3}><KV label="Bill to">{inv.customer_name}<br /><span className="text-xs text-slate-500">{inv.customer_city}{inv.customer_ntn ? ` · NTN ${inv.customer_ntn}` : ''}</span></KV><KV label="Date">{fmtDate(inv.invoice_date)}</KV><KV label="Due">{fmtDate(inv.due_date)}</KV>
+            {inv.trip_code && <KV label="Trip"><Link to={`/trips/${inv.trip_id}`} className="text-brand-700 hover:underline">{inv.trip_code}</Link></KV>}{inv.voucher_no && <KV label="Voucher"><button className="text-brand-700 hover:underline" onClick={() => onVoucher?.(inv.voucher_id)}>{inv.voucher_no}</button></KV>}</KVGrid>
+          <div className="overflow-x-auto rounded-lg border border-line"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="th">Description</th><th className="th">Bowzer</th><th className="th text-right">Qty</th><th className="th text-right">Rate</th><th className="th text-right">Amount</th></tr></thead>
+            <tbody className="divide-y divide-line">{data.lines.map((l: any) => <tr key={l.id}><td className="td">{l.description}</td><td className="td">{l.vehicle_code ?? ''}</td><td className="td text-right tabular-nums">{Number(l.qty)} {l.unit}</td><td className="td text-right tabular-nums">{money(l.rate)}</td><td className="td text-right tabular-nums">{money(l.amount)}</td></tr>)}</tbody>
+            <tfoot><tr><td colSpan={4} className="td text-right">Subtotal</td><td className="td text-right tabular-nums">{money(inv.subtotal)}</td></tr>{Number(inv.tax_amount) > 0 && <tr><td colSpan={4} className="td text-right">Sales tax {Number(inv.tax_pct)}%</td><td className="td text-right tabular-nums">{money(inv.tax_amount)}</td></tr>}
+              <tr className="font-bold"><td colSpan={4} className="td text-right">Total (PKR)</td><td className="td text-right tabular-nums">{money(inv.total)}</td></tr>{inv.kind === 'INVOICE' && <><tr><td colSpan={4} className="td text-right">Received</td><td className="td text-right tabular-nums">{money(inv.paid)}</td></tr><tr className="font-semibold"><td colSpan={4} className="td text-right">Outstanding</td><td className="td text-right tabular-nums">{money(inv.outstanding)}</td></tr></>}</tfoot></table></div>
+          {data.receipts.length > 0 && <div className="print:hidden"><p className="mb-1 text-sm font-semibold">Settlements</p>{data.receipts.map((r: any) => <button key={r.voucher_id + r.voucher_no} onClick={() => onVoucher?.(r.voucher_id)} className="block text-sm text-brand-700 hover:underline">{r.voucher_no} · {fmtDate(r.voucher_date)} · PKR {money(r.amount)}</button>)}</div>}
+          {inv.notes && <p className="text-sm text-slate-600">{inv.notes}</p>}
+    </div>
+  );
+}
+
 export function InvoiceDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const { can } = useAuth(); const [receipt, setReceipt] = useState(false); const [voiding, setVoiding] = useState(false); const [reason, setReason] = useState(''); const [voucher, setVoucher] = useState<number | null>(null);
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ['/sales/invoices', id], queryFn: () => get(`/sales/invoices/${id}`) });
@@ -70,16 +88,7 @@ export function InvoiceDrawer({ id, onClose }: { id: number; onClose: () => void
         {inv.kind === 'INVOICE' && inv.outstanding > 0 && can('finance:post') && <Button variant="primary" icon={<Banknote className="h-4 w-4" />} onClick={() => setReceipt(true)}>Receive payment</Button>}
         {can('sales:manage') && inv.paid <= 0 && <Button variant="danger" onClick={() => setVoiding(true)}>Void</Button>}</> : undefined}>
       {isLoading ? <PageLoader /> : error || !inv ? <ErrorState error={error} onRetry={() => refetch()} /> : (
-        <div className="print-area space-y-5">
-          <div className="flex items-start justify-between"><div><p className="text-lg font-bold">GasMan Private Limited</p><p className="text-xs text-slate-500">LPG bowzer transport — demo document, synthetic data</p></div><div className="text-right"><p className="text-sm font-semibold">{inv.kind === 'RETURN' ? 'CREDIT NOTE' : 'SALES INVOICE'}</p><p className="text-sm">{inv.invoice_no}</p><StatusPill status={inv.status} /></div></div>
-          <KVGrid cols={3}><KV label="Bill to">{inv.customer_name}<br /><span className="text-xs text-slate-500">{inv.customer_city}{inv.customer_ntn ? ` · NTN ${inv.customer_ntn}` : ''}</span></KV><KV label="Date">{fmtDate(inv.invoice_date)}</KV><KV label="Due">{fmtDate(inv.due_date)}</KV>
-            {inv.trip_code && <KV label="Trip"><Link to={`/trips/${inv.trip_id}`} className="text-brand-700 hover:underline">{inv.trip_code}</Link></KV>}{inv.voucher_no && <KV label="Voucher"><button className="text-brand-700 hover:underline" onClick={() => setVoucher(inv.voucher_id)}>{inv.voucher_no}</button></KV>}</KVGrid>
-          <div className="overflow-x-auto rounded-lg border border-line"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="th">Description</th><th className="th">Bowzer</th><th className="th text-right">Qty</th><th className="th text-right">Rate</th><th className="th text-right">Amount</th></tr></thead>
-            <tbody className="divide-y divide-line">{data.lines.map((l: any) => <tr key={l.id}><td className="td">{l.description}</td><td className="td">{l.vehicle_code ?? ''}</td><td className="td text-right tabular-nums">{Number(l.qty)} {l.unit}</td><td className="td text-right tabular-nums">{money(l.rate)}</td><td className="td text-right tabular-nums">{money(l.amount)}</td></tr>)}</tbody>
-            <tfoot><tr><td colSpan={4} className="td text-right">Subtotal</td><td className="td text-right tabular-nums">{money(inv.subtotal)}</td></tr>{Number(inv.tax_amount) > 0 && <tr><td colSpan={4} className="td text-right">Sales tax {Number(inv.tax_pct)}%</td><td className="td text-right tabular-nums">{money(inv.tax_amount)}</td></tr>}
-              <tr className="font-bold"><td colSpan={4} className="td text-right">Total (PKR)</td><td className="td text-right tabular-nums">{money(inv.total)}</td></tr>{inv.kind === 'INVOICE' && <><tr><td colSpan={4} className="td text-right">Received</td><td className="td text-right tabular-nums">{money(inv.paid)}</td></tr><tr className="font-semibold"><td colSpan={4} className="td text-right">Outstanding</td><td className="td text-right tabular-nums">{money(inv.outstanding)}</td></tr></>}</tfoot></table></div>
-          {data.receipts.length > 0 && <div className="print:hidden"><p className="mb-1 text-sm font-semibold">Settlements</p>{data.receipts.map((r: any) => <button key={r.voucher_id + r.voucher_no} onClick={() => setVoucher(r.voucher_id)} className="block text-sm text-brand-700 hover:underline">{r.voucher_no} · {fmtDate(r.voucher_date)} · PKR {money(r.amount)}</button>)}</div>}
-          {inv.notes && <p className="text-sm text-slate-600">{inv.notes}</p>}
+        <div className="print-area"><InvoiceSheet data={data} onVoucher={setVoucher} />
           {voiding && <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 print:hidden"><TextArea label="Reason for voiding" required rows={2} value={reason} onChange={(e) => setReason(e.target.value)} error={(v.error as any)?.fields?.reason} />{v.error && !(v.error as any).fields && <p className="text-sm text-red-700">{v.error.message}</p>}<div className="flex gap-2"><Button onClick={() => setVoiding(false)}>Keep</Button><Button variant="danger" loading={v.isPending} onClick={() => v.mutate(undefined as never)}>Void now</Button></div></div>}
         </div>
       )}
@@ -140,11 +149,13 @@ function OrderModal({ onClose }: { onClose: () => void }) {
 
 export default function Invoices() {
   const { can } = useAuth(); const [sp, setSp] = useSearchParams(); const tab = sp.get('tab') ?? 'invoices';
-  const [adding, setAdding] = useState(false); const [receipt, setReceipt] = useState(false); const [open, setOpen] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false); const [receipt, setReceipt] = useState(false); const [open, setOpen] = useState<number | null>(null); const [sel, setSel] = useState<Set<number>>(new Set()); const navTo = useNavigate();
   const { state, set, clear, page } = useQueryState();
   const { data, isLoading, error, refetch } = useList('/sales/invoices', { page, pageSize: 15, q: state.q, status: state.status, kind: state.kind, overdue: state.overdue, from: state.from, to: state.to }, { enabled: tab === 'invoices' });
   const s = data?.summary;
+  const toggle = (id: number) => setSel((c) => { const n = new Set(c); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const cols: Column<any>[] = [
+    { key: 'sel', header: '', render: (i) => <input type="checkbox" aria-label={`Select ${i.invoice_no}`} checked={sel.has(i.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggle(i.id)} /> },
     { key: 'no', header: 'Invoice', sortKey: 'no', render: (i) => <span className="font-semibold text-brand-700">{i.invoice_no}</span> },
     { key: 'date', header: 'Date', render: (i) => <span className="whitespace-nowrap tabular-nums">{fmtDate(i.invoice_date)}</span> },
     { key: 'cust', header: 'Customer', render: (i) => <div><p>{i.customer_name}</p>{i.trip_code && <p className="text-xs text-slate-500">{i.trip_code}</p>}</div> },
@@ -156,7 +167,7 @@ export default function Invoices() {
   return (
     <>
       <PageHeader title="Sales & Invoicing" subtitle="Freight invoices, credit notes, customer receipts and sales orders — vouchers only, no point-of-sale" breadcrumbs={[{ label: 'Sales' }, { label: 'Invoices' }]}
-        actions={<>{can('finance:post') && <Button icon={<Banknote className="h-4 w-4" />} onClick={() => setReceipt(true)}>Receive payment</Button>}{can('sales:manage') && <Button variant="primary" icon={<FilePlus2 className="h-4 w-4" />} onClick={() => setAdding(true)}>New invoice</Button>}</>} />
+        actions={<>{sel.size > 0 && <Button icon={<Printer className="h-4 w-4" />} onClick={() => navTo(`/sales/print?ids=${[...sel].join(',')}`)}>Print selected ({sel.size})</Button>}{can('finance:post') && <Button icon={<Banknote className="h-4 w-4" />} onClick={() => setReceipt(true)}>Receive payment</Button>}{can('sales:manage') && <Button variant="primary" icon={<FilePlus2 className="h-4 w-4" />} onClick={() => setAdding(true)}>New invoice</Button>}</>} />
       <Tabs value={tab} onChange={(k) => setSp({ tab: k })} tabs={[{ key: 'invoices', label: 'Invoices' }, { key: 'queue', label: 'Billing queue' }, { key: 'orders', label: 'Sales orders' }]} />
       <div className="mt-4">
         {tab === 'invoices' && <>
@@ -176,4 +187,15 @@ export default function Invoices() {
       {open != null && <InvoiceDrawer id={open} onClose={() => setOpen(null)} />}
     </>
   );
+}
+
+/** Several invoices on one print job, one per page (old system: multi-invoice printing). */
+export function InvoicePrintBatch() {
+  const [sp] = useSearchParams(); const ids = (sp.get('ids') ?? '').split(',').map(Number).filter(Boolean).slice(0, 40);
+  const results = useQueries({ queries: ids.map((id) => ({ queryKey: ['/sales/invoices', id], queryFn: () => get(`/sales/invoices/${id}`) })) });
+  if (results.some((r) => r.isLoading)) return <PageLoader />;
+  return <>
+    <div className="mb-3 flex items-center justify-between print:hidden"><Link to="/sales/invoices" className="text-sm font-medium text-brand-700">← Back to invoices</Link><Button variant="primary" icon={<Printer className="h-4 w-4" />} onClick={() => window.print()}>Print {ids.length} invoice(s)</Button></div>
+    <div className="print-area mx-auto max-w-3xl space-y-8">{results.map((r, i) => r.data ? <div key={ids[i]} className="rounded-xl border border-line bg-white p-6 [break-after:page] print:border-0 print:p-0"><InvoiceSheet data={r.data} /></div> : null)}</div>
+  </>;
 }

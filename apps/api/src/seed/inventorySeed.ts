@@ -205,5 +205,6 @@ export async function seedInventory(c: { rng: Rng; NOW: number; log?: (m: string
   // 5) make the low-stock list interesting
   await exec(`UPDATE items i SET min_level = CEIL(COALESCE((SELECT sum(qty) FROM stock_balances b WHERE b.item_id = i.id AND b.holder_type = 'WAREHOUSE'), 0)) + 2, reorder_qty = 12
                WHERE i.code IN ('FLT-FUEL', 'LGT-BULB', 'OIL-BRAKE', 'CAM-SIDE', 'TRK-FUEL')`);
+  await exec(`UPDATE stock_docs d SET maintenance_id = (SELECT m.id FROM maintenance_records m WHERE m.vehicle_id = d.vehicle_id AND abs(m.scheduled_on - d.doc_date) <= 20 ORDER BY abs(m.scheduled_on - d.doc_date) LIMIT 1) WHERE d.type IN ('PARTS_REPLACEMENT','ISSUE')`);
   c.log?.(`inventory seed complete (${evs.length} stock documents, ${skipped} skipped)`);
 }

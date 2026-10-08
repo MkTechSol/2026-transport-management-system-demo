@@ -14,9 +14,10 @@ import { KpiCard, PageHeader } from '../ui/Page';
 import { Pill, StatusPill } from '../ui/Pill';
 import { Column, DataTable, FilterBar, SearchInput } from '../ui/Table';
 import { MaintenanceModal } from '../features/forms';
+import { StockVoucherModal } from '../features/stock';
 
 export default function Maintenance() {
-  const { can } = useAuth(); const [adding, setAdding] = useState(false); const [complete, setComplete] = useState<any>(null);
+  const { can } = useAuth(); const [adding, setAdding] = useState(false); const [complete, setComplete] = useState<any>(null); const [parts, setParts] = useState<any>(null);
   const { state, set, clear, page } = useQueryState(); const { sort, dir, onSort } = useSort(state, set as any, 'scheduled');
   const { data, isLoading, error, refetch } = useList('/maintenance', { page, pageSize: 15, q: state.q, status: state.status, type: state.type, due: state.due, sort: state.sort, dir: state.sort ? dir : undefined });
   const act = useAction((v: { id: number; status: string }) => patch(`/maintenance/${v.id}`, { status: v.status }), { invalidate: ['/maintenance', '/vehicles'], success: 'Maintenance updated.' });
@@ -26,9 +27,10 @@ export default function Maintenance() {
     { key: 'title', header: 'Job', render: (m) => <div><p className="font-medium">{m.title}</p><p className="text-xs text-slate-500">{titleCase(m.type)}{m.vendor ? ` · ${m.vendor}` : ''}</p></div> },
     { key: 'on', header: 'Scheduled', sortKey: 'scheduled', render: (m) => <div><p className="tabular-nums">{fmtDate(m.scheduled_on)}</p>{['SCHEDULED'].includes(m.status) && <p className={`text-xs ${m.days_left < 0 ? 'font-medium text-red-600' : 'text-slate-500'}`}>{m.days_left < 0 ? `${Math.abs(m.days_left)}d overdue` : m.days_left === 0 ? 'Today' : `in ${m.days_left}d`}</p>}</div> },
     { key: 'status', header: 'Status', sortKey: 'status', render: (m) => <StatusPill status={m.status} /> },
-    { key: 'cost', header: 'Cost', sortKey: 'cost', hideBelow: 'md', render: (m) => <span className="tabular-nums">{m.cost_pkr ? fmtPkr(m.cost_pkr) : '—'}</span> },
+    { key: 'cost', header: 'Cost', sortKey: 'cost', hideBelow: 'md', render: (m) => <div><span className="tabular-nums">{m.cost_pkr ? fmtPkr(m.cost_pkr) : '—'}</span>{m.parts_docs > 0 && <p className="text-xs text-slate-500">Parts from stock {fmtPkr(m.parts_cost)}</p>}</div> },
     { key: 'act', header: '', render: (m) => can('maintenance:manage') && (
       <div className="flex justify-end gap-1.5">
+        {can('inventory:manage') && ['SCHEDULED', 'IN_PROGRESS'].includes(m.status) && <Button size="sm" variant="ghost" onClick={() => setParts(m)}>Parts</Button>}
         {m.status === 'SCHEDULED' && <Button size="sm" loading={act.isPending && act.variables?.id === m.id} onClick={() => act.mutate({ id: m.id, status: 'IN_PROGRESS' })}>Start</Button>}
         {m.status === 'IN_PROGRESS' && <Button size="sm" variant="success" onClick={() => setComplete(m)}>Complete</Button>}
         {['SCHEDULED', 'IN_PROGRESS'].includes(m.status) && <Button size="sm" variant="ghost" onClick={() => act.mutate({ id: m.id, status: 'CANCELLED' })}>Cancel</Button>}
@@ -47,6 +49,7 @@ export default function Maintenance() {
       </FilterBar>
       <DataTable columns={cols} rows={data?.data} loading={isLoading} error={error} onRetry={() => refetch()} rowKey={(m) => m.id} sort={sort} dir={dir} onSort={onSort} page={page} pageSize={15} total={data?.meta.total ?? 0} onPage={(p) => set({ page: p }, false)} empty={{ title: 'No maintenance records' }} />
       {adding && <MaintenanceModal onClose={() => setAdding(false)} />}
+      {parts && <StockVoucherModal type="PARTS_REPLACEMENT" preset={{ vehicleId: String(parts.vehicle_id), maintenanceId: parts.id, note: `Job card: ${parts.title}` }} onClose={() => setParts(null)} onSaved={() => refetch()} />}
       {complete && <CompleteModal m={complete} onClose={() => setComplete(null)} />}
     </>
   );

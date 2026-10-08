@@ -22,8 +22,8 @@ maintenanceRouter.get('/', requirePerm('maintenance:view'), wrap(async (req, res
   if (p.q) { where.push('(m.title ILIKE :q OR v.code ILIKE :q OR m.vendor ILIKE :q)'); r.q = likeTerm(p.q); }
   const w = where.join(' AND ');
   const [rows, [{ total }], [{ due, overdue, in_progress }]] = await Promise.all([
-    q(`SELECT m.*, v.code AS vehicle_code, v.registration_no, (m.scheduled_on - CURRENT_DATE)::int AS days_left
-         FROM maintenance_records m JOIN vehicles v ON v.id = m.vehicle_id WHERE ${w}
+    q(`SELECT m.*, v.code AS vehicle_code, v.registration_no, (m.scheduled_on - CURRENT_DATE)::int AS days_left, COALESCE(pc.cost, 0)::float AS parts_cost, COALESCE(pc.docs, 0)::int AS parts_docs
+         FROM maintenance_records m LEFT JOIN LATERAL (SELECT sum(total_value) AS cost, count(*) AS docs FROM stock_docs WHERE maintenance_id = m.id AND status = 'POSTED') pc ON true JOIN vehicles v ON v.id = m.vehicle_id WHERE ${w}
         ORDER BY ${orderBy(p.sort, p.dir, { scheduled: 'm.scheduled_on', vehicle: 'v.code', status: 'm.status', cost: 'm.cost_pkr' }, `CASE WHEN m.status IN ('SCHEDULED','IN_PROGRESS') THEN 0 ELSE 1 END, m.scheduled_on ASC`)} LIMIT :lim OFFSET :off`, r),
     q(`SELECT count(*)::int AS total FROM maintenance_records m JOIN vehicles v ON v.id = m.vehicle_id WHERE ${w}`, r),
     q(`SELECT count(*) FILTER (WHERE status = 'SCHEDULED' AND scheduled_on <= CURRENT_DATE + 7)::int AS due, count(*) FILTER (WHERE status = 'SCHEDULED' AND scheduled_on < CURRENT_DATE)::int AS overdue,

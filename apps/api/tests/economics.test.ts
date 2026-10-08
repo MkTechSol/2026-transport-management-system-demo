@@ -208,3 +208,15 @@ describe('settings and routes', () => {
     expect((await (await as(USERS.dispatcher)).patch(`/routes/${row.id}`, { freightPerMt: 1 })).status).toBe(403);
   });
 });
+
+describe('trip completion feeds finance', () => {
+  it('raises the freight invoice and ledger entries when a trip completes', async () => {
+    const trip = await runningTrip();
+    await finish(trip.id, trip.base + 500);
+    const t = await q1<any>('SELECT status, invoice_id FROM trips WHERE id = :id', { id: trip.id });
+    expect(t.status).toBe('COMPLETED');
+    expect(t.invoice_id).toBeGreaterThan(0);
+    const v = await q1<any>("SELECT count(*)::int AS n FROM voucher_lines WHERE trip_id = :id AND credit > 0 AND account_id IN (SELECT id FROM accounts WHERE type = 'INCOME')", { id: trip.id });
+    expect(v.n).toBe(1);
+  });
+});

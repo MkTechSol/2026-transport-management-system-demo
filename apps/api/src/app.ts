@@ -31,9 +31,14 @@ import { fuelRouter } from './modules/fuel';
 import { approvalsRouter } from './modules/approvals';
 import { settingsRouter } from './modules/settings';
 import { publicRouter } from './modules/public';
+import { financeRouter } from './modules/finance';
+import { salesRouter } from './modules/sales';
+import { vendorsRouter } from './modules/vendors';
+import { registerFinanceHooks } from './services/sales';
 import { sequelize } from './db/sequelize';
 
 export function createApp() {
+  registerFinanceHooks();
   const app = express();
   app.set('trust proxy', 1); // behind nginx
   app.disable('x-powered-by');
@@ -71,6 +76,9 @@ export function createApp() {
   api.use('/fuel', fuelRouter);
   api.use('/approvals', approvalsRouter);
   api.use('/settings', settingsRouter);
+  api.use('/finance', financeRouter);
+  api.use('/sales', salesRouter);
+  api.use('/vendors', vendorsRouter);
   api.use('/trips', tripsRouter);
   api.use('/tracking', trackingRouter);
   api.use('/maintenance', maintenanceRouter);

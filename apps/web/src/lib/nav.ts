@@ -1,5 +1,5 @@
 import type { Permission } from '@gasman/shared';
-import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardCheck, ClipboardList, Fuel as FuelIcon, FileText, Gauge, LayoutGrid, MapPin, Receipt, Settings as SettingsIcon, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound, Waypoints } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardCheck, ClipboardList, Fuel as FuelIcon, FileText, Gauge, LayoutGrid, MapPin, Receipt, Settings as SettingsIcon, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound, Waypoints, BookOpen, Landmark, Banknote, FileSpreadsheet, Handshake } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon; perm?: Permission[]; roles?: string[]; end?: boolean; hideFor?: string[] }
@@ -18,12 +18,19 @@ export const NAV: NavGroup[] = [
     { to: '/drivers', label: 'Drivers', icon: UserRound, perm: ['drivers:view'], hideFor: ['DRIVER'] },
     { to: '/locations', label: 'Plants & Locations', icon: Building2, perm: ['locations:view'] },
     { to: '/routes', label: 'Routes & Freight', icon: Waypoints, perm: ['routes:view'], hideFor: ['DRIVER'] },
-    { to: '/distributors', label: 'Distributors', icon: Store, perm: ['distributors:view'] },
+    { to: '/customers', label: 'Customers', icon: Store, perm: ['sales:view', 'distributors:view'] },
+    { to: '/vendors', label: 'Vendors', icon: Handshake, perm: ['vendors:view'] },
   ] },
   { title: 'Fuel & Expenses', items: [
     { to: '/fuel', label: 'Fuel', icon: FuelIcon, perm: ['fuel:view'], hideFor: ['DRIVER'] },
     { to: '/expenses', label: 'Trip Expenses', icon: Receipt, perm: ['expenses:view'], hideFor: ['DRIVER'] },
     { to: '/approvals', label: 'Approvals', icon: ClipboardCheck, perm: ['approvals:view'] },
+  ] },
+  { title: 'Sales & Finance', items: [
+    { to: '/sales/invoices', label: 'Invoices & Orders', icon: FileSpreadsheet, perm: ['sales:view'] },
+    { to: '/finance/vouchers', label: 'Vouchers', icon: Banknote, perm: ['finance:view'] },
+    { to: '/finance/reports', label: 'Financial Reports', icon: BookOpen, perm: ['finance:view'] },
+    { to: '/finance/accounts', label: 'Accounts & Banks', icon: Landmark, perm: ['finance:view'] },
   ] },
   { title: 'Compliance & Safety', items: [
     { to: '/maintenance', label: 'Maintenance', icon: Wrench, perm: ['maintenance:view'] },

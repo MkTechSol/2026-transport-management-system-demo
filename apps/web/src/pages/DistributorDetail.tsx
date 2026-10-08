@@ -11,6 +11,7 @@ import { KV, KVGrid, KpiCard, PageHeader, Section } from '../ui/Page';
 import { StatusPill } from '../ui/Pill';
 import { DistributorForm } from './Distributors';
 import { COLORS } from '../ui/charts';
+import { CustomerAccount } from '../features/accounts';
 
 export default function DistributorDetail() {
   const { id } = useParams(); const nav = useNavigate(); const { can } = useAuth(); const [edit, setEdit] = useState(false);
@@ -30,6 +31,7 @@ export default function DistributorDetail() {
       <Section className="mt-5" title="Delivery history" padded={false}><table className="w-full"><thead className="bg-slate-50/70"><tr><th className="th">Trip</th><th className="th">From</th><th className="th">Vehicle</th><th className="th">Departure</th><th className="th">Delivered</th><th className="th">Status</th></tr></thead>
         <tbody className="divide-y divide-line">{trips.map((t: any) => <tr key={t.id} className="cursor-pointer hover:bg-brand-50/50" onClick={() => nav(`/trips/${t.id}`)}><td className="td font-medium text-brand-700">{t.code}</td><td className="td">{t.origin_name}</td><td className="td">{t.vehicle_code ?? '—'}</td><td className="td">{fmtDate(t.scheduled_departure)}</td><td className="td tabular-nums">{fmtMt(t.delivered_mt)}</td><td className="td"><StatusPill status={t.status} /></td></tr>)}
           {!trips.length && <tr><td colSpan={6} className="td py-10 text-center text-slate-500">No deliveries yet.</td></tr>}</tbody></table></Section>
+      {can('sales:view') && <div className="mt-5"><CustomerAccount customer={d} /></div>}
       {edit && <DistributorForm dist={d} onClose={() => { setEdit(false); refetch(); }} />}
     </>
   );

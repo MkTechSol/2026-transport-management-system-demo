@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CUSTOMER_TYPES, LOCATION_TYPES, REGIONS } from '@gasman/shared';
+import { CUSTOMER_TYPES, LOCATION_TYPES, REGIONS, can } from '@gasman/shared';
 import { q, q1, exec, sequelize } from '../db/sequelize';
 import { conflict, notFound } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
@@ -114,19 +114,21 @@ const distBody = z.object({
 
 distributorsRouter.get('/', requirePerm('distributors:view', 'trips:view'), wrap(async (req, res) => {
   const p = paging(req.query);
-  const f = parse(z.object({ region: z.string().optional(), status: z.string().optional(), compact: z.string().optional() }), req.query);
+  const f = parse(z.object({ region: z.string().optional(), status: z.string().optional(), compact: z.string().optional(), customerType: z.string().optional() }), req.query);
   const where = ['1=1']; const r: Record<string, unknown> = { lim: p.pageSize, off: p.offset };
   if (p.q) { where.push('(d.name ILIKE :q OR d.code ILIKE :q OR d.city ILIKE :q OR d.contact_name ILIKE :q)'); r.q = likeTerm(p.q); }
   if (f.region) { where.push('d.region = :region'); r.region = f.region; }
   if (f.status) { where.push('d.status = :status'); r.status = f.status; }
+  if (f.customerType) { where.push('d.customer_type = :ctype'); r.ctype = f.customerType; }
   const w = where.join(' AND ');
+  const showBal = can(req.user!.role, 'sales:view');
   if (f.compact) { // typeahead source for the trip wizard
     const rows = await q(`SELECT d.id, d.code, d.name, d.city, d.region, d.status, d.location_id FROM distributors d WHERE ${w} AND d.status = 'ACTIVE' ORDER BY d.name LIMIT 30`, r);
     return res.json({ data: rows });
   }
   const [rows, [{ total }]] = await Promise.all([
-    q(`SELECT d.*, l.lat, l.lng, s.trips_total, s.mt_total, s.last_delivery
-         FROM distributors d JOIN locations l ON l.id = d.location_id
+    q(`SELECT d.*, l.lat, l.lng, s.trips_total, s.mt_total, s.last_delivery${showBal ? `, COALESCE(b.bal, 0)::float AS balance` : ''}
+         FROM distributors d JOIN locations l ON l.id = d.location_id${showBal ? ` LEFT JOIN LATERAL (SELECT sum(x.debit - x.credit) AS bal FROM voucher_lines x JOIN vouchers v ON v.id = x.voucher_id AND v.status = 'POSTED' WHERE x.party_type = 'CUSTOMER' AND x.party_id = d.id AND x.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) b ON true` : ''}
          LEFT JOIN LATERAL (SELECT count(*)::int AS trips_total, COALESCE(sum(t.delivered_mt),0)::float AS mt_total, max(t.delivered_at) AS last_delivery
                               FROM trips t WHERE t.distributor_id = d.id AND t.status = 'COMPLETED') s ON true
         WHERE ${w} ORDER BY ${orderBy(p.sort, p.dir, { name: 'd.name', code: 'd.code', region: 'd.region', city: 'd.city', trips: 's.trips_total', volume: 's.mt_total' }, 'd.name')} LIMIT :lim OFFSET :off`, r),

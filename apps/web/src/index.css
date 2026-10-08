@@ -21,3 +21,9 @@
 .truck-marker { background: transparent; border: none; }
 .skeleton { @apply animate-pulse rounded bg-slate-200/80; }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+@media print {
+  body * { visibility: hidden; }
+  .print-area, .print-area * { visibility: visible; }
+  .print-area { position: absolute; left: 0; top: 0; width: 100%; }
+}

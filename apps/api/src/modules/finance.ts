@@ -180,7 +180,7 @@ const REPORTS: Record<string, { title: string; run: (p: Params) => Promise<Repor
       rows, totals: { debit: sum(lines, 'debit'), credit: sum(lines, 'credit'), balance: bal } };
   } },
   'daybook': { title: 'Day book', run: async (p) => {
-    const rows = await q(`SELECT v.voucher_date AS date, v.voucher_no, v.type, COALESCE(v.narration, '') AS narration, COALESCE(ve.code, '') AS vehicle, v.total::float AS amount, v.status
+    const rows = await q(`SELECT v.voucher_date AS date, v.id AS voucher_id, v.voucher_no, v.type, COALESCE(v.narration, '') AS narration, COALESCE(ve.code, '') AS vehicle, v.total::float AS amount, v.status
         FROM vouchers v LEFT JOIN vehicles ve ON ve.id = v.vehicle_id WHERE v.voucher_date BETWEEN :from AND :to ORDER BY v.voucher_date, v.id`, p);
     const out = rows.map((r: any) => ({ ...r, type: VOUCHER_LABELS[r.type] ?? r.type }));
     return { title: 'Day book', subtitle: `${p.from} to ${p.to}`, columns: [{ key: 'date', label: 'Date', type: 'date' }, { key: 'voucher_no', label: 'Voucher' }, { key: 'type', label: 'Type' }, { key: 'narration', label: 'Narration' }, { key: 'vehicle', label: 'Bowzer' }, { key: 'amount', label: 'Amount', type: 'money' }, { key: 'status', label: 'Status' }], rows: out, totals: { amount: sum(out.filter((r: any) => r.status === 'POSTED'), 'amount') } };

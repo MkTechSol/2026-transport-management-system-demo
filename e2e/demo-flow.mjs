@@ -159,6 +159,61 @@ await step('T17 Driver sees mobile home, records pre-trip check and starts the a
   const nav = await D.getByRole('link', { name: 'Fleet', exact: true }).count(); if (nav) throw new Error('driver sees Fleet nav');
 });
 
+// ---- Finance & sales (accountant) ----
+const { page: F } = await session('accountant@gasman-demo.local');
+await step('T18 Accountant posts a cash payment voucher with F10', async () => {
+  await F.goto(`${BASE}/finance/vouchers`); await F.getByRole('heading', { name: 'Vouchers' }).waitFor();
+  await F.getByRole('button', { name: /New voucher/ }).click(); await F.getByRole('menuitem', { name: 'Cash payment' }).click();
+  const dlg = F.getByRole('dialog', { name: 'Cash payment' }); await dlg.waitFor();
+  await dlg.getByRole('combobox', { name: 'Account' }).selectOption({ label: '5410 · Office & utilities' });
+  await dlg.getByLabel('Amount 1').fill('2500'); await dlg.getByLabel('Memo 1').fill('e2e stationery');
+  await F.keyboard.press('F10');
+  await F.getByText(/Cash payment CPV-\d+-\d+ posted/).waitFor({ timeout: 10000 });
+  await F.getByRole('dialog').getByText('Where the money went', { exact: false }).count();
+});
+await step('T19 Unbalanced journal voucher is blocked client- and server-side', async () => {
+  await F.keyboard.press('Escape');
+  await F.getByRole('button', { name: /New voucher/ }).click(); await F.getByRole('menuitem', { name: 'Journal voucher' }).click();
+  const dlg = F.getByRole('dialog', { name: 'Journal voucher' }); await dlg.waitFor();
+  await dlg.getByRole('combobox', { name: 'Account' }).first().selectOption({ label: '1110 · Cash in hand' }); await dlg.getByLabel('Debit 1').fill('100');
+  await dlg.getByRole('combobox', { name: 'Account' }).nth(1).selectOption({ label: '5410 · Office & utilities' }); await dlg.getByLabel('Credit 2').fill('90');
+  await dlg.getByText(/Difference/).waitFor();
+  await dlg.getByRole('button', { name: /Post voucher/ }).click();
+  await dlg.getByText(/does not balance/i).waitFor();
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+});
+await step('T20 Receive a customer payment and see it on the invoice list', async () => {
+  await F.goto(`${BASE}/sales/invoices`); await F.getByRole('heading', { name: 'Sales & Invoicing' }).waitFor();
+  await F.getByRole('button', { name: 'Receive payment' }).click();
+  const dlg = F.getByRole('dialog', { name: 'Receive payment' }); await dlg.waitFor();
+  await dlg.getByPlaceholder(/Search distributor/).fill('Peshawar'); await dlg.getByRole('option', { name: /Peshawar/i }).first().click();
+  await dlg.getByLabel(/Amount/).fill('1000'); await dlg.getByLabel('Received by').selectOption('CASH');
+  await F.keyboard.press('F10');
+  await F.getByText(/Receipt CRV-\d+-\d+ posted/).waitFor({ timeout: 10000 });
+});
+await step('T21 Invoice opens as a printable document', async () => {
+  await F.goto(`${BASE}/sales/invoices`); await F.locator('tbody tr').first().click();
+  await F.getByText('SALES INVOICE').waitFor(); await F.getByRole('button', { name: 'Print' }).waitFor();
+  await F.screenshot({ path: `${shots}/e2e-11-invoice.png` });
+});
+await step('T22 Financial statements balance', async () => {
+  await F.goto(`${BASE}/finance/reports/balance-sheet`); await F.getByText('Liabilities + equity − assets (must be 0)').waitFor();
+  const row = F.locator('tr', { hasText: 'must be 0' }); const t = await row.innerText(); if (!/0\.00/.test(t)) throw new Error('balance sheet does not balance: ' + t);
+  await F.goto(`${BASE}/finance/reports/trial-balance`); await F.getByRole('columnheader', { name: 'Closing Dr' }).waitFor();
+  await F.goto(`${BASE}/finance/reports/bowzer-pnl`); await F.getByRole('columnheader', { name: 'Margin %' }).waitFor();
+  await F.screenshot({ path: `${shots}/e2e-12-bowzer-pnl.png` });
+});
+await step('T23 Bowzer account tab shows P&L and ledger; customer account shows credit meter', async () => {
+  await F.goto(`${BASE}/fleet`); await F.locator('tbody tr').first().click(); await F.getByRole('tab', { name: /Account/ }).click();
+  await F.getByText('Where the money went').waitFor(); await F.getByText(/^Ledger — /).first().waitFor();
+  await F.goto(`${BASE}/customers?tab=parties`); await F.locator('tbody tr').first().click(); await F.getByText('Account & receivables').waitFor();
+});
+await step('T24 Operations roles cannot reach finance (UI hidden, API 403)', async () => {
+  const { page: X } = await session('dispatcher@gasman-demo.local');
+  if (await X.getByRole('link', { name: 'Vouchers' }).count()) throw new Error('dispatcher sees Vouchers nav');
+  await X.goto(`${BASE}/finance/vouchers`); await X.getByText(/permission|not allowed|access/i).first().waitFor({ timeout: 8000 });
+});
+
 await browser.close();
 console.log('\n=== SUMMARY ==='); const fails = results.filter((r) => r[0] === 'FAIL');
 console.log(`${results.length - fails.length}/${results.length} steps passed`); fails.forEach((f) => console.log(' FAIL:', f[1], '-', f[3]));

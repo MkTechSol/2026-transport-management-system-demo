@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Link, Route, Routes } from 'react-router-dom';
+import { Link, Navigate, Route, Routes } from 'react-router-dom';
 import { Component, ReactNode } from 'react';
 import { Layout } from './features/Layout';
 import { HomeRedirect, RequireAuth, RequirePerm } from './features/guards';
@@ -34,6 +34,12 @@ const Approvals = lazy(() => import('./pages/Approvals'));
 const RoutesPage = lazy(() => import('./pages/Routes'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Track = lazy(() => import('./pages/Track'));
+const Vouchers = lazy(() => import('./pages/Vouchers'));
+const FinanceReports = lazy(() => import('./pages/FinanceReports'));
+const Accounts = lazy(() => import('./pages/Accounts'));
+const Invoices = lazy(() => import('./pages/Invoices'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Vendors = lazy(() => import('./pages/Vendors'));
 
 class Boundary extends Component<{ children: ReactNode }, { err: boolean }> {
   state = { err: false };
@@ -78,6 +84,13 @@ export default function App() {
             <Route path="fuel" element={P(['fuel:view'], <Fuel />)} />
             <Route path="approvals" element={P(['approvals:view'], <Approvals />)} />
             <Route path="routes" element={P(['routes:view'], <RoutesPage />)} />
+            <Route path="customers" element={P(['sales:view', 'distributors:view'], <Customers />)} />
+            <Route path="sales/invoices" element={P(['sales:view'], <Invoices />)} />
+            <Route path="finance/vouchers" element={P(['finance:view'], <Vouchers />)} />
+            <Route path="finance/reports" element={<Navigate to="/finance/reports/daybook" replace />} />
+            <Route path="finance/reports/:key" element={P(['finance:view'], <FinanceReports />)} />
+            <Route path="finance/accounts" element={P(['finance:view'], <Accounts />)} />
+            <Route path="vendors" element={P(['vendors:view'], <Vendors />)} />
             <Route path="settings" element={P(['settings:view'], <Settings />)} />
             <Route path="audit" element={P(['audit:view'], <Audit />)} />
             <Route path="users" element={P(['users:view'], <Users />)} />

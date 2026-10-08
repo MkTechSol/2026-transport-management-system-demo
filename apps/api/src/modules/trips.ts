@@ -6,7 +6,7 @@ import { forbidden, notFound, unprocessable } from '../lib/errors';
 import { id, likeTerm, listResponse, orderBy, paging, parse, wrap } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
 import { audit } from '../services/audit';
-import { addEvent, assignTrip, candidates, createTrip, getTripDetail, TRIP_LIST_FROM, TRIP_LIST_SELECT, transitionTrip, updateTrip, validateAssignment } from '../services/trips';
+import { addEvent, assignTrip, getOrCreateRoute, candidates, createTrip, getTripDetail, TRIP_LIST_FROM, TRIP_LIST_SELECT, transitionTrip, updateTrip, validateAssignment } from '../services/trips';
 
 export const tripsRouter = Router();
 
@@ -77,6 +77,14 @@ tripsRouter.get('/board', requirePerm('trips:view'), wrap(async (req, res) => {
     out[k] = { items, total };
   }));
   res.json({ columns: out });
+}));
+
+/** Route estimate for the trip wizard (creates a synthetic route on first use; see docs/ADR on routing). */
+tripsRouter.get('/route-preview', requirePerm('trips:create'), wrap(async (req, res) => {
+  const b = parse(z.object({ originId: z.coerce.number().int().positive(), destinationId: z.coerce.number().int().positive() }), req.query);
+  if (b.originId === b.destinationId) return res.json({ route: null });
+  const r = await getOrCreateRoute(b.originId, b.destinationId);
+  res.json({ route: { id: r.id, code: r.code, distanceKm: r.distance_km, estDurationMin: r.est_duration_min } });
 }));
 
 tripsRouter.post('/', requirePerm('trips:create'), wrap(async (req, res) => {

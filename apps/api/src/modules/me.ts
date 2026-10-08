@@ -9,7 +9,7 @@ export const meRouter = Router();
 /** Mobile / driver home: one call returns everything the driver app needs on launch. */
 meRouter.get('/home', wrap(async (req, res) => {
   const driverId = req.user!.driverId;
-  if (!driverId) return res.json({ driver: null, trips: [], documents: [], upcoming: [] });
+  if (!driverId) return res.json({ driver: null, activeTrips: [], upcomingTrips: [], documents: [], recentTrips: [] });
   const [driver, active, upcoming, documents, recent] = await Promise.all([
     q1(`SELECT d.id, d.employee_id, d.full_name, d.status, d.experience_years, d.safety_score, l.name AS home_plant_name FROM drivers d LEFT JOIN locations l ON l.id = d.home_plant_id WHERE d.id = :id`, { id: driverId }),
     q(`SELECT ${TRIP_LIST_SELECT} ${TRIP_LIST_FROM} WHERE t.driver_id = :id AND t.status IN ('DISPATCHED','IN_TRANSIT','DELAYED','ON_HOLD','ARRIVED','DELIVERED','RETURNING') ORDER BY t.scheduled_departure`, { id: driverId }),

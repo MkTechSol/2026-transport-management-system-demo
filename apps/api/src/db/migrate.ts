@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { sequelize } from './sequelize';
 import { logger } from '../logger';
 
-const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
+const here = path.dirname(fileURLToPath(import.meta.url));
+// Works from source (src/db), a bundled server (dist) and bundled CLIs (dist/seed, dist/db).
+const dir = [path.join(here, 'migrations'), path.join(here, '..', 'migrations'), path.join(here, 'db', 'migrations')].find((d) => fs.existsSync(d)) ?? path.join(here, 'migrations');
 
 /** Applies pending .sql migrations in filename order. Each runs in its own transaction. Safe for production. */
 export async function migrate(log = true): Promise<string[]> {

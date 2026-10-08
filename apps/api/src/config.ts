@@ -20,7 +20,7 @@ const schema = z.object({
   SIM_ENABLED: z.enum(['true', 'false']).default('false'),
   SIM_TICK_SECONDS: z.coerce.number().default(5),
   /** Simulated time compression: 1 real second advances the trip by this many seconds of driving. */
-  SIM_SPEEDUP: z.coerce.number().default(60),
+  SIM_SPEEDUP: z.coerce.number().default(3),
   /** Business rule toggle (demo assumption): require a passed pre-trip safety check before dispatch. */
   REQUIRE_PRETRIP_CHECK: z.enum(['true', 'false']).default('true'),
   /** IANA timezone used for 'today' / daily buckets on dashboards & reports. */

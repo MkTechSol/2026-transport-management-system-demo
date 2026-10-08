@@ -1,0 +1,34 @@
+# GasMan TMS - isolated stack (database + api + web). Binds only to 127.0.0.1 so an existing host nginx can front it.
+name: gasman-tms
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gasman
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: gasman_tms
+    volumes: [ "gasman_pg:/var/lib/postgresql/data" ]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gasman -d gasman_tms"], interval: 10s, timeout: 5s, retries: 10 }
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      NODE_ENV: production
+      APP_ENV: ${APP_ENV:-demo}
+      PORT: 4000
+      DATABASE_URL: postgres://gasman:${POSTGRES_PASSWORD}@db:5432/gasman_tms
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://tms-demo.example.com}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      SIM_ENABLED: ${SIM_ENABLED:-true}
+      SIM_SPEEDUP: ${SIM_SPEEDUP:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    restart: unless-stopped
+    depends_on: [ api ]
+    ports: [ "127.0.0.1:${WEB_PORT:-8480}:80" ]
+volumes:
+  gasman_pg:

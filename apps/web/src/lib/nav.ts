@@ -1,0 +1,36 @@
+import type { Permission } from '@gasman/shared';
+import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardList, FileText, Gauge, LayoutGrid, MapPin, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+export interface NavItem { to: string; label: string; icon: LucideIcon; perm?: Permission[]; roles?: string[]; end?: boolean; hideFor?: string[] }
+export interface NavGroup { title: string; items: NavItem[] }
+
+export const NAV: NavGroup[] = [
+  { title: 'Operations', items: [
+    { to: '/driver', label: 'My Trips', icon: ClipboardList, roles: ['DRIVER'] },
+    { to: '/', label: 'Control Tower', icon: LayoutGrid, perm: ['dashboard:view'], end: true },
+    { to: '/trips', label: 'Trips', icon: RouteIcon, perm: ['trips:view'], hideFor: ['DRIVER'] },
+    { to: '/dispatch', label: 'Dispatch Board', icon: Gauge, perm: ['trips:assign', 'trips:dispatch'] },
+    { to: '/tracking', label: 'Live Tracking', icon: Activity, perm: ['tracking:view'] },
+  ] },
+  { title: 'Resources', items: [
+    { to: '/fleet', label: 'Fleet', icon: Truck, perm: ['vehicles:view'], hideFor: ['DRIVER'] },
+    { to: '/drivers', label: 'Drivers', icon: UserRound, perm: ['drivers:view'], hideFor: ['DRIVER'] },
+    { to: '/locations', label: 'Plants & Locations', icon: Building2, perm: ['locations:view'] },
+    { to: '/distributors', label: 'Distributors', icon: Store, perm: ['distributors:view'] },
+  ] },
+  { title: 'Compliance & Safety', items: [
+    { to: '/maintenance', label: 'Maintenance', icon: Wrench, perm: ['maintenance:view'] },
+    { to: '/documents', label: 'Documents', icon: FileText, perm: ['documents:view'], hideFor: ['DRIVER'] },
+    { to: '/safety', label: 'Safety', icon: ShieldCheck, perm: ['safety:view'] },
+  ] },
+  { title: 'Insights', items: [
+    { to: '/reports', label: 'Reports', icon: BarChart3, perm: ['reports:view'] },
+    { to: '/notifications', label: 'Notifications', icon: Bell, perm: ['notifications:view'] },
+  ] },
+  { title: 'Administration', items: [
+    { to: '/audit', label: 'Audit Log', icon: Shield, perm: ['audit:view'] },
+    { to: '/users', label: 'Users & Roles', icon: UserCog, perm: ['users:view'] },
+  ] },
+];
+export const _unused = { AlertTriangle, MapPin, Users };

@@ -3,7 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "description": "GasMan Transport Management System - demo / production foundation (MK TechSol)",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @gasman/api\" \"npm run dev -w @gasman/web\"",
     "build": "npm run build -w @gasman/api && npm run build -w @gasman/web",
@@ -12,10 +15,14 @@
     "db:migrate": "npm run db:migrate -w @gasman/api",
     "db:seed": "npm run db:seed -w @gasman/api",
     "db:demo-reset": "npm run db:demo-reset -w @gasman/api",
-    "db:seed-load": "npm run db:seed-load -w @gasman/api"
+    "db:seed-load": "npm run db:seed-load -w @gasman/api",
+    "docs:permissions": "tsx scripts/gen-permissions.ts > docs/09-permissions.md",
+    "e2e": "node e2e/demo-flow.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

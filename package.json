@@ -1,0 +1,21 @@
+{
+  "name": "gasman-tms",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GasMan Transport Management System - demo / production foundation (MK TechSol)",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @gasman/api\" \"npm run dev -w @gasman/web\"",
+    "build": "npm run build -w @gasman/api && npm run build -w @gasman/web",
+    "typecheck": "npm run typecheck -w @gasman/shared && npm run typecheck -w @gasman/api && npm run typecheck -w @gasman/web",
+    "test": "npm run test -w @gasman/api",
+    "db:migrate": "npm run db:migrate -w @gasman/api",
+    "db:seed": "npm run db:seed -w @gasman/api",
+    "db:demo-reset": "npm run db:demo-reset -w @gasman/api",
+    "db:seed-load": "npm run db:seed-load -w @gasman/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": { "node": ">=20" }
+}

@@ -1,0 +1,537 @@
+import type { Request } from 'express';
+import {
+  allowedTransitions, findTransition, roleCanTarget, REQUIRED_DRIVER_DOCS, REQUIRED_VEHICLE_DOCS, DOC_TYPE_LABELS,
+  TRIP_STATUS_LABELS, TripStatus, Role, Transition,
+} from '@gasman/shared';
+import { q, q1, exec, sequelize } from '../db/sequelize';
+import { AppError, conflict, forbidden, notFound, unprocessable, badRequest } from '../lib/errors';
+import { buildSyntheticRoute } from '../lib/geo';
+import { config } from '../config';
+import { audit } from './audit';
+import { AUDIENCE, notify } from './notify';
+import type { AuthUser } from '../middleware/auth';
+
+export const fmtDate = (d: string | Date) =>
+  new Date(typeof d === 'string' ? d.slice(0, 10) + 'T00:00:00Z' : d).toLocaleDateString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+  });
+
+export const TRIP_LIST_SELECT = `
+  t.id, t.code, t.status, t.priority, t.lpg_source, t.planned_load_mt, t.loaded_mt, t.delivered_mt,
+  t.scheduled_departure, t.planned_arrival, t.departed_at, t.arrived_at, t.delivered_at, t.completed_at, t.delay_minutes,
+  t.progress_pct, t.eta_at, t.cur_speed_kmh, t.last_position_at, t.cur_lat, t.cur_lng,
+  t.vehicle_id, v.code AS vehicle_code, v.registration_no, t.driver_id, d.full_name AS driver_name,
+  t.origin_location_id, o.name AS origin_name, o.code AS origin_code,
+  t.destination_location_id, dl.name AS destination_name, dl.city AS destination_city, dl.region AS destination_region,
+  t.distributor_id, di.name AS distributor_name`;
+export const TRIP_LIST_FROM = `
+  FROM trips t
+  JOIN locations o  ON o.id = t.origin_location_id
+  JOIN locations dl ON dl.id = t.destination_location_id
+  LEFT JOIN vehicles v ON v.id = t.vehicle_id
+  LEFT JOIN drivers d  ON d.id = t.driver_id
+  LEFT JOIN distributors di ON di.id = t.distributor_id`;
+
+// ---------- Routes ----------
+
+export async function getOrCreateRoute(originId: number, destId: number, tx?: any) {
+  const existing = await q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx);
+  if (existing) return existing;
+  const o = await q1<any>('SELECT code, lat, lng FROM locations WHERE id = :id', { id: originId }, tx);
+  const d = await q1<any>('SELECT code, lat, lng FROM locations WHERE id = :id', { id: destId }, tx);
+  if (!o || !d) throw notFound('Origin or destination');
+  const r = buildSyntheticRoute([o.lat, o.lng], [d.lat, d.lng], originId * 31 + destId);
+  return q1<any>(
+    `INSERT INTO routes (code, origin_location_id, destination_location_id, distance_km, est_duration_min, path, checkpoints)
+     VALUES (:code, :o, :d, :km, :min, :path, :cps)
+     ON CONFLICT (origin_location_id, destination_location_id) DO UPDATE SET code = routes.code
+     RETURNING *`,
+    { code: `RT-${o.code}-${d.code}`.slice(0, 40), o: originId, d: destId, km: r.distanceKm, min: r.estDurationMin, path: JSON.stringify(r.path), cps: JSON.stringify(r.checkpoints) },
+    tx,
+  ).then((rows) => rows ?? q1<any>('SELECT * FROM routes WHERE origin_location_id = :o AND destination_location_id = :d', { o: originId, d: destId }, tx));
+}
+
+// ---------- Assignment validation (single source of truth, used by validation, candidates & dispatch) ----------
+
+export interface Violation {
+  resource: 'vehicle' | 'driver';
+  code: string;
+  message: string;
+}
+
+interface TripWindow {
+  id: number | null;
+  scheduled_departure: Date;
+  planned_arrival: Date;
+  planned_load_mt: number;
+}
+
+const windowOf = (t: TripWindow) => {
+  const start = new Date(t.scheduled_departure);
+  const dur = new Date(t.planned_arrival).getTime() - start.getTime();
+  // Occupancy = outbound + return leg + 2h turnaround (demo assumption).
+  return { start, end: new Date(start.getTime() + 2 * dur + 2 * 3600_000) };
+};
+
+async function docFacts(col: 'vehicle_id' | 'driver_id', ids: number[], tx?: any) {
+  if (!ids.length) return new Map<number, Map<string, string>>();
+  const rows = await q<any>(
+    `SELECT ${col} AS rid, doc_type, max(expires_on) AS expires_on FROM documents WHERE ${col} IN (:ids) GROUP BY ${col}, doc_type`,
+    { ids }, tx,
+  );
+  const m = new Map<number, Map<string, string>>();
+  for (const r of rows) {
+    if (!m.has(r.rid)) m.set(r.rid, new Map());
+    m.get(r.rid)!.set(r.doc_type, r.expires_on);
+  }
+  return m;
+}
+
+async function conflictFacts(col: 'vehicle_id' | 'driver_id', ids: number[], trip: TripWindow, tx?: any) {
+  const m = new Map<number, { id: number; code: string; status: string }>();
+  if (!ids.length) return m;
+  const { start, end } = windowOf(trip);
+  const rows = await q<any>(
+    `SELECT t.id, t.code, t.status, t.${col} AS rid FROM trips t
+      WHERE t.${col} IN (:ids) AND (:tid::int IS NULL OR t.id <> :tid::int)
+        AND t.status IN ('ASSIGNED','DISPATCHED','IN_TRANSIT','DELAYED','ON_HOLD','ARRIVED','DELIVERED','RETURNING')
+        AND t.scheduled_departure < :wend
+        AND (t.scheduled_departure + 2 * (t.planned_arrival - t.scheduled_departure) + interval '2 hours') > :wstart
+      ORDER BY t.scheduled_departure`,
+    { ids, tid: trip.id, wstart: start.toISOString(), wend: end.toISOString() }, tx,
+  );
+  for (const r of rows) if (!m.has(r.rid)) m.set(r.rid, r);
+  return m;
+}
+
+function docViolations(resource: 'vehicle' | 'driver', label: string, required: readonly string[], docs: Map<string, string> | undefined, tripEnd: Date): Violation[] {
+  const out: Violation[] = [];
+  const endDay = tripEnd.toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  for (const type of required) {
+    const exp = docs?.get(type);
+    const name = DOC_TYPE_LABELS[type] ?? type;
+    if (!exp) out.push({ resource, code: 'DOC_MISSING', message: `${label} has no ${name} on record.` });
+    else if (exp < today) out.push({ resource, code: 'DOC_EXPIRED', message: `${label}: ${name} expired on ${fmtDate(exp)}.` });
+    else if (exp < endDay) out.push({ resource, code: 'DOC_EXPIRES_DURING_TRIP', message: `${label}: ${name} expires on ${fmtDate(exp)}, before this trip ends.` });
+  }
+  return out;
+}
+
+export function evaluateVehicle(trip: TripWindow, v: any, docs: Map<string, string> | undefined, conflictTrip?: { code: string }): Violation[] {
+  const label = `Vehicle ${v.code}`;
+  const out: Violation[] = [];
+  if (v.archived_at) out.push({ resource: 'vehicle', code: 'ARCHIVED', message: `${label} is archived.` });
+  if (v.status === 'INACTIVE') out.push({ resource: 'vehicle', code: 'INACTIVE', message: `${label} is inactive.` });
+  if (v.status === 'MAINTENANCE') out.push({ resource: 'vehicle', code: 'IN_MAINTENANCE', message: `${label} is currently in maintenance.` });
+  if (conflictTrip) out.push({ resource: 'vehicle', code: 'DOUBLE_BOOKED', message: `${label} is already assigned to Trip ${conflictTrip.code}.` });
+  if (Number(trip.planned_load_mt) > Number(v.capacity_mt))
+    out.push({ resource: 'vehicle', code: 'CAPACITY', message: `${label} capacity (${v.capacity_mt} MT) is below the planned load (${trip.planned_load_mt} MT).` });
+  out.push(...docViolations('vehicle', label, REQUIRED_VEHICLE_DOCS, docs, windowOf(trip).end));
+  return out;
+}
+
+export function evaluateDriver(trip: TripWindow, d: any, docs: Map<string, string> | undefined, conflictTrip?: { code: string }): Violation[] {
+  const label = `Driver ${d.full_name}`;
+  const out: Violation[] = [];
+  if (d.archived_at) out.push({ resource: 'driver', code: 'ARCHIVED', message: `${label} is archived.` });
+  if (d.status === 'SUSPENDED') out.push({ resource: 'driver', code: 'SUSPENDED', message: `${label} is suspended.` });
+  if (d.status === 'ON_LEAVE') out.push({ resource: 'driver', code: 'ON_LEAVE', message: `${label} is on leave.` });
+  if (conflictTrip) out.push({ resource: 'driver', code: 'DOUBLE_BOOKED', message: `${label} is already assigned to Trip ${conflictTrip.code}.` });
+  out.push(...docViolations('driver', label, REQUIRED_DRIVER_DOCS, docs, windowOf(trip).end));
+  return out;
+}
+
+export async function validateAssignment(trip: TripWindow, vehicleId: number, driverId: number, tx?: any): Promise<Violation[]> {
+  // Sequential on purpose: a transaction owns a single connection and must not run concurrent queries.
+  const v = await q1<any>('SELECT * FROM vehicles WHERE id = :id', { id: vehicleId }, tx);
+  const d = await q1<any>('SELECT * FROM drivers WHERE id = :id', { id: driverId }, tx);
+  if (!v) throw notFound('Vehicle');
+  if (!d) throw notFound('Driver');
+  const vDocs = await docFacts('vehicle_id', [vehicleId], tx);
+  const dDocs = await docFacts('driver_id', [driverId], tx);
+  const vConf = await conflictFacts('vehicle_id', [vehicleId], trip, tx);
+  const dConf = await conflictFacts('driver_id', [driverId], trip, tx);
+  return [
+    ...evaluateVehicle(trip, v, vDocs.get(vehicleId), vConf.get(vehicleId)),
+    ...evaluateDriver(trip, d, dDocs.get(driverId), dConf.get(driverId)),
+  ];
+}
+
+/** Ranked eligible vehicles & drivers for a trip (dispatcher "recommended assignment" panel). */
+export async function candidates(tripId: number) {
+  const trip = await q1<any>('SELECT * FROM trips WHERE id = :id', { id: tripId });
+  if (!trip) throw notFound('Trip');
+  const [vehicles, drivers] = await Promise.all([
+    q<any>(`SELECT v.*, l.name AS last_location_name, dd.full_name AS default_driver_name FROM vehicles v
+            LEFT JOIN locations l ON l.id = v.last_location_id LEFT JOIN drivers dd ON dd.id = v.default_driver_id
+            WHERE v.archived_at IS NULL AND v.status <> 'INACTIVE' ORDER BY v.code`),
+    q<any>(`SELECT d.*, (SELECT count(*)::int FROM trips t WHERE t.driver_id = d.id AND t.status = 'COMPLETED') AS completed_trips
+            FROM drivers d WHERE d.archived_at IS NULL ORDER BY d.full_name`),
+  ]);
+  const vIds = vehicles.map((v) => v.id);
+  const dIds = drivers.map((d) => d.id);
+  const [vDocs, dDocs, vConf, dConf] = await Promise.all([
+    docFacts('vehicle_id', vIds), docFacts('driver_id', dIds), conflictFacts('vehicle_id', vIds, trip), conflictFacts('driver_id', dIds, trip),
+  ]);
+  const vehicleRows = vehicles.map((v) => {
+    const violations = evaluateVehicle(trip, v, vDocs.get(v.id), vConf.get(v.id));
+    let score = 0;
+    const why: string[] = [];
+    if (v.home_plant_id === trip.origin_location_id) { score += 30; why.push('Home plant matches origin'); }
+    if (v.status === 'AVAILABLE') { score += 20; why.push('Available now'); }
+    const slack = Number(v.capacity_mt) - Number(trip.planned_load_mt);
+    if (slack >= 0) { score += Math.max(0, 20 - slack * 2); why.push(`Capacity ${v.capacity_mt} MT fits ${trip.planned_load_mt} MT load`); }
+    if (v.fleet_type === 'OWNED') score += 5;
+    return {
+      id: v.id, code: v.code, registrationNo: v.registration_no, fleetType: v.fleet_type, capacityMt: v.capacity_mt, status: v.status,
+      lastLocation: v.last_location_name, defaultDriverId: v.default_driver_id, defaultDriverName: v.default_driver_name,
+      eligible: violations.length === 0, violations: violations.map((x) => x.message), score: violations.length ? 0 : score, why,
+    };
+  });
+  const driverRows = drivers.map((d) => {
+    const violations = evaluateDriver(trip, d, dDocs.get(d.id), dConf.get(d.id));
+    let score = 0;
+    const why: string[] = [];
+    if (d.status === 'AVAILABLE') { score += 20; why.push('Available now'); }
+    if (d.home_plant_id === trip.origin_location_id) { score += 20; why.push('Based at origin plant'); }
+    score += Math.min(15, d.experience_years); if (d.experience_years >= 8) why.push(`${d.experience_years} yrs experience`);
+    score += Math.round((d.safety_score - 80) / 2);
+    return {
+      id: d.id, employeeId: d.employee_id, name: d.full_name, status: d.status, experienceYears: d.experience_years, safetyScore: d.safety_score,
+      eligible: violations.length === 0, violations: violations.map((x) => x.message), score: violations.length ? 0 : score, why,
+    };
+  });
+  vehicleRows.sort((a, b) => Number(b.eligible) - Number(a.eligible) || b.score - a.score);
+  driverRows.sort((a, b) => Number(b.eligible) - Number(a.eligible) || b.score - a.score);
+  return { vehicles: vehicleRows, drivers: driverRows };
+}
+
+// ---------- Trip creation / update ----------
+
+export interface CreateTripInput {
+  originLocationId: number;
+  destinationLocationId?: number;
+  distributorId?: number;
+  lpgSource: 'LOCAL' | 'IMPORTED';
+  plannedLoadMt: number;
+  scheduledDeparture: string;
+  plannedArrival?: string;
+  priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+  notes?: string;
+  vehicleId?: number;
+  driverId?: number;
+  submit?: boolean;
+}
+
+export async function createTrip(user: AuthUser, req: Request, input: CreateTripInput) {
+  return sequelize.transaction(async (tx) => {
+    let destId = input.destinationLocationId;
+    let distributorId = input.distributorId ?? null;
+    if (distributorId) {
+      const dist = await q1<any>('SELECT id, location_id, status, name FROM distributors WHERE id = :id', { id: distributorId }, tx);
+      if (!dist) throw notFound('Distributor');
+      if (dist.status !== 'ACTIVE') throw unprocessable(`Distributor ${dist.name} is not active, so new trips cannot be created for it.`);
+      destId = dist.location_id;
+    }
+    if (!destId) throw badRequest('Choose a destination or a distributor.', { fields: { destinationLocationId: 'Required' } });
+    if (destId === input.originLocationId) throw badRequest('Origin and destination must be different.', { fields: { destinationLocationId: 'Must differ from origin' } });
+    const origin = await q1<any>("SELECT id, name, type FROM locations WHERE id = :id AND status = 'ACTIVE'", { id: input.originLocationId }, tx);
+    if (!origin) throw notFound('Origin location');
+    if (!['PLANT', 'TERMINAL', 'DEPOT'].includes(origin.type)) throw badRequest('Trips must start from a plant, terminal or depot.', { fields: { originLocationId: 'Not a loading point' } });
+    const route = await getOrCreateRoute(input.originLocationId, destId, tx);
+    const dep = new Date(input.scheduledDeparture);
+    const arr = input.plannedArrival ? new Date(input.plannedArrival) : new Date(dep.getTime() + route.est_duration_min * 60_000);
+    if (arr <= dep) throw badRequest('Planned arrival must be after departure.', { fields: { plannedArrival: 'Must be after departure' } });
+
+    const [{ n }] = await q<any>("SELECT nextval('trip_code_seq')::int AS n", {}, tx);
+    const code = `TRP-${dep.getUTCFullYear()}-${String(n).padStart(4, '0')}`;
+    const row = await q1<any>(
+      `INSERT INTO trips (code, status, priority, origin_location_id, destination_location_id, distributor_id, route_id, lpg_source,
+          planned_load_mt, scheduled_departure, planned_arrival, notes, created_by, cur_lat, cur_lng)
+       SELECT :code, 'DRAFT', :prio, :o, :d, :dist, :rid, :src, :load, :dep, :arr, :notes, :uid, l.lat, l.lng FROM locations l WHERE l.id = :o
+       RETURNING *`,
+      { code, prio: input.priority, o: input.originLocationId, d: destId, dist: distributorId, rid: route.id, src: input.lpgSource, load: input.plannedLoadMt, dep: dep.toISOString(), arr: arr.toISOString(), notes: input.notes ?? null, uid: user.id },
+      tx,
+    );
+    await addEvent(tx, row.id, { type: 'STATUS_CHANGE', toStatus: 'DRAFT', message: `Trip ${code} created`, actor: user.id });
+    await audit(req, { action: 'CREATE', entityType: 'TRIP', entityId: row.id, entityLabel: code, tx });
+    if (input.submit || input.vehicleId) await doTransition(tx, user, req, row, 'PLANNED', {});
+    if (input.vehicleId && input.driverId) await doAssign(tx, user, req, row.id, input.vehicleId, input.driverId);
+    else if (input.vehicleId || input.driverId) throw badRequest('Select both a vehicle and a driver, or neither.');
+    return row.id as number;
+  });
+}
+
+export async function updateTrip(user: AuthUser, req: Request, id: number, patch: Partial<CreateTripInput>) {
+  return sequelize.transaction(async (tx) => {
+    const t = await lockTrip(tx, id);
+    if (!['DRAFT', 'PLANNED', 'ASSIGNED'].includes(t.status))
+      throw conflict(`Trip ${t.code} is ${TRIP_STATUS_LABELS[t.status as TripStatus].toLowerCase()} and can no longer be edited.`);
+    const sets: string[] = [];
+    const r: Record<string, unknown> = { id };
+    const map: [keyof CreateTripInput, string, (v: any) => unknown][] = [
+      ['plannedLoadMt', 'planned_load_mt', (v) => v], ['priority', 'priority', (v) => v], ['notes', 'notes', (v) => v],
+      ['lpgSource', 'lpg_source', (v) => v],
+      ['scheduledDeparture', 'scheduled_departure', (v) => new Date(v).toISOString()],
+      ['plannedArrival', 'planned_arrival', (v) => new Date(v).toISOString()],
+    ];
+    for (const [k, col, f] of map) if (patch[k] !== undefined) { sets.push(`${col} = :${col}`); r[col] = f(patch[k]); }
+    if (patch.destinationLocationId || patch.distributorId || patch.originLocationId) {
+      if (t.status === 'ASSIGNED') throw conflict('Unassign the vehicle and driver before changing the route.');
+      let dest = patch.destinationLocationId ?? t.destination_location_id;
+      let distributorId = t.distributor_id;
+      if (patch.distributorId) {
+        const d = await q1<any>('SELECT location_id FROM distributors WHERE id = :id', { id: patch.distributorId }, tx);
+        if (!d) throw notFound('Distributor');
+        dest = d.location_id; distributorId = patch.distributorId;
+      } else if (patch.destinationLocationId) distributorId = null;
+      const origin = patch.originLocationId ?? t.origin_location_id;
+      if (origin === dest) throw badRequest('Origin and destination must be different.');
+      const route = await getOrCreateRoute(origin, dest, tx);
+      sets.push('origin_location_id = :o', 'destination_location_id = :d', 'distributor_id = :dist', 'route_id = :rid');
+      Object.assign(r, { o: origin, d: dest, dist: distributorId, rid: route.id });
+    }
+    if (!sets.length) return id;
+    sets.push('updated_at = now()');
+    const updated = await q1<any>(`UPDATE trips SET ${sets.join(', ')} WHERE id = :id RETURNING *`, r, tx);
+    if (new Date(updated.planned_arrival) <= new Date(updated.scheduled_departure)) throw badRequest('Planned arrival must be after departure.');
+    if (updated.vehicle_id && updated.driver_id) {
+      const v = await validateAssignment(updated, updated.vehicle_id, updated.driver_id, tx);
+      if (v.length) throw unprocessable(v[0].message, { violations: v });
+    }
+    await addEvent(tx, id, { type: 'NOTE', message: 'Trip details updated', actor: user.id });
+    await audit(req, { action: 'UPDATE', entityType: 'TRIP', entityId: id, entityLabel: t.code, tx });
+    return id;
+  });
+}
+
+// ---------- Assignment ----------
+
+async function lockTrip(tx: any, id: number) {
+  const t = await q1<any>('SELECT * FROM trips WHERE id = :id FOR UPDATE', { id }, tx);
+  if (!t) throw notFound('Trip');
+  return t;
+}
+
+async function doAssign(tx: any, user: AuthUser, req: Request, tripId: number, vehicleId: number, driverId: number) {
+  const t = await lockTrip(tx, tripId);
+  if (!['DRAFT', 'PLANNED', 'ASSIGNED'].includes(t.status))
+    throw conflict(`Trip ${t.code} is ${TRIP_STATUS_LABELS[t.status as TripStatus].toLowerCase()}; vehicle and driver can only be assigned before dispatch.`);
+  // Fixed lock order (vehicle, then driver) prevents deadlocks between concurrent dispatchers.
+  await q('SELECT id FROM vehicles WHERE id = :id FOR UPDATE', { id: vehicleId }, tx);
+  await q('SELECT id FROM drivers WHERE id = :id FOR UPDATE', { id: driverId }, tx);
+  const violations = await validateAssignment(t, vehicleId, driverId, tx);
+  if (violations.length) throw unprocessable(violations[0].message, { violations });
+  const v = await q1<any>('SELECT code, default_driver_id FROM vehicles WHERE id = :id', { id: vehicleId }, tx);
+  const d = await q1<any>('SELECT full_name FROM drivers WHERE id = :id', { id: driverId }, tx);
+  await exec(`UPDATE trips SET vehicle_id = :v, driver_id = :d, status = 'ASSIGNED', status_before_hold = NULL, updated_at = now() WHERE id = :id`, { v: vehicleId, d: driverId, id: tripId }, tx);
+  await addEvent(tx, tripId, {
+    type: 'ASSIGNMENT', fromStatus: t.status, toStatus: 'ASSIGNED', actor: user.id,
+    message: `Assigned vehicle ${v.code} and driver ${d.full_name}`,
+  });
+  await audit(req, { action: 'ASSIGN', entityType: 'TRIP', entityId: tripId, entityLabel: t.code, meta: { vehicleId, driverId }, tx });
+}
+
+export async function assignTrip(user: AuthUser, req: Request, tripId: number, vehicleId: number, driverId: number) {
+  await sequelize.transaction((tx) => doAssign(tx, user, req, tripId, vehicleId, driverId));
+}
+
+// ---------- Events ----------
+
+export async function addEvent(
+  tx: any, tripId: number,
+  e: { type: string; message: string; fromStatus?: string; toStatus?: string; actor?: number | null; lat?: number; lng?: number; clientEventId?: string; at?: Date },
+) {
+  await exec(
+    `INSERT INTO trip_events (trip_id, type, from_status, to_status, message, actor_user_id, lat, lng, client_event_id, occurred_at)
+     VALUES (:t, :type, :f, :to, :m, :a, :lat, :lng, :cid, COALESCE(:at, now()))`,
+    { t: tripId, type: e.type, f: e.fromStatus ?? null, to: e.toStatus ?? null, m: e.message, a: e.actor ?? null, lat: e.lat ?? null, lng: e.lng ?? null, cid: e.clientEventId ?? null, at: e.at?.toISOString() ?? null },
+    tx,
+  );
+}
+
+// ---------- Status transitions ----------
+
+export interface TransitionPayload {
+  reason?: string;
+  note?: string;
+  loadedMt?: number;
+  deliveredMt?: number;
+  receivedBy?: string;
+  deliveryNoteNo?: string;
+  podNotes?: string;
+  lat?: number;
+  lng?: number;
+  clientEventId?: string;
+}
+
+/** Actor = null means the system (simulator / scheduled job). */
+export async function transitionTrip(user: AuthUser | null, req: Request | undefined, id: number, to: TripStatus, payload: TransitionPayload = {}) {
+  return sequelize.transaction(async (tx) => {
+    const t = await lockTrip(tx, id);
+    if (payload.clientEventId) {
+      const seen = await q1<any>('SELECT 1 AS x FROM trip_events WHERE trip_id = :id AND client_event_id = :c', { id, c: payload.clientEventId }, tx);
+      if (seen) return t.id as number; // idempotent replay from an offline-first client
+    }
+    await doTransition(tx, user, req, t, to, payload);
+    return id;
+  });
+}
+
+const OPS_ROLES: Role[] = ['SUPER_ADMIN', 'TRANSPORT_MANAGER', 'DISPATCHER'];
+
+async function doTransition(tx: any, user: AuthUser | null, req: Request | undefined, t: any, to: TripStatus, p: TransitionPayload) {
+  const from = t.status as TripStatus;
+  const label = (s: string) => TRIP_STATUS_LABELS[s as TripStatus] ?? s;
+  if (user && !roleCanTarget(to, user.role) && !(from === 'ON_HOLD' && to === t.status_before_hold && OPS_ROLES.includes(user.role)))
+    throw forbidden(`Your role is not allowed to move a trip to ${label(to)}.`);
+  let tr: Transition | undefined = findTransition(from, to);
+  const isResume = from === 'ON_HOLD' && to === t.status_before_hold;
+  if (isResume) tr = { from, to, roles: OPS_ROLES, label: 'Resume' };
+  if (!tr) throw conflict(`Trip ${t.code} cannot move from ${label(from)} to ${label(to)}.`);
+  if (user && !tr.roles.includes(user.role)) throw forbidden(`Your role is not allowed to ${tr.label.toLowerCase()}.`);
+  if (user?.role === 'DRIVER' && t.driver_id !== user.driverId) throw forbidden('You can only update trips assigned to you.');
+  if ((to === 'ON_HOLD' || to === 'CANCELLED') && !p.reason?.trim()) throw badRequest(`Please give a reason to ${to === 'CANCELLED' ? 'cancel' : 'hold'} this trip.`, { fields: { reason: 'Required' } });
+  if (to === 'ASSIGNED') throw badRequest('Use the assignment action to assign a vehicle and driver.');
+  if (to === 'PLANNED' && from === 'DRAFT') {
+    if (!t.origin_location_id || !t.destination_location_id) throw unprocessable('Origin and destination are required.');
+  }
+
+  const sets: string[] = ['status = :to', 'updated_at = now()'];
+  const r: Record<string, unknown> = { id: t.id, to };
+  let msg = `${tr.label}: ${label(from)} → ${label(to)}`;
+
+  if (to === 'ON_HOLD') { sets.push('status_before_hold = :sbh', 'hold_reason = :reason'); r.sbh = from; r.reason = p.reason; msg = `Put on hold: ${p.reason}`; }
+  if (isResume) { sets.push('status_before_hold = NULL', 'hold_reason = NULL'); msg = `Resumed to ${label(to)}`; }
+  if (to === 'CANCELLED') { sets.push('cancel_reason = :reason', 'cancelled_at = now()'); r.reason = p.reason; msg = `Cancelled: ${p.reason}`; }
+  if (to === 'PLANNED' && from === 'ASSIGNED') { sets.push('vehicle_id = NULL', 'driver_id = NULL'); msg = 'Vehicle and driver unassigned'; }
+
+  let vehicle: any = null;
+  let driver: any = null;
+  if (t.vehicle_id) vehicle = await q1<any>('SELECT * FROM vehicles WHERE id = :id FOR UPDATE', { id: t.vehicle_id }, tx);
+  if (t.driver_id) driver = await q1<any>('SELECT * FROM drivers WHERE id = :id FOR UPDATE', { id: t.driver_id }, tx);
+
+  if (to === 'DISPATCHED') {
+    if (!vehicle || !driver) throw unprocessable('Assign a vehicle and a driver before dispatching.');
+    const violations = await validateAssignment(t, vehicle.id, driver.id, tx);
+    if (violations.length) throw unprocessable(violations[0].message, { violations });
+    if (vehicle.status !== 'AVAILABLE') {
+      const other = await q1<any>(`SELECT code FROM trips WHERE vehicle_id = :v AND id <> :id AND status IN ('DISPATCHED','IN_TRANSIT','DELAYED','ON_HOLD','ARRIVED','DELIVERED','RETURNING') LIMIT 1`, { v: vehicle.id, id: t.id }, tx);
+      throw unprocessable(other ? `Vehicle ${vehicle.code} is already on Trip ${other.code}.` : `Vehicle ${vehicle.code} is not available (${vehicle.status.toLowerCase().replace('_', ' ')}).`);
+    }
+    if (driver.status !== 'AVAILABLE') throw unprocessable(`Driver ${driver.full_name} is not available (${driver.status.toLowerCase().replace('_', ' ')}).`);
+    msg = `Dispatched with ${vehicle.code} / ${driver.full_name}`;
+  }
+  if (to === 'IN_TRANSIT' && from === 'DISPATCHED') {
+    if (config.requirePretripCheck) {
+      const ok = await q1<any>(`SELECT 1 AS x FROM safety_checks WHERE trip_id = :id AND kind = 'PRE_TRIP' AND result = 'PASS' LIMIT 1`, { id: t.id }, tx);
+      if (!ok) throw unprocessable('A passed pre-trip safety check is required before the trip can start. Record it under Safety checks.', { code: 'PRETRIP_REQUIRED' });
+    }
+    const loaded = p.loadedMt ?? Number(t.planned_load_mt);
+    if (vehicle && loaded > Number(vehicle.capacity_mt)) throw unprocessable(`Loaded quantity (${loaded} MT) exceeds vehicle capacity (${vehicle.capacity_mt} MT).`);
+    sets.push('loaded_mt = :loaded', 'progress_pct = 0', 'delay_minutes = 0');
+    r.loaded = loaded;
+    msg = `Departed with ${loaded} MT LPG`;
+  }
+  if (to === 'ARRIVED') {
+    const dest = await q1<any>('SELECT lat, lng, name FROM locations WHERE id = :id', { id: t.destination_location_id }, tx);
+    const late = Math.max(0, Math.round((Date.now() - new Date(t.planned_arrival).getTime()) / 60_000));
+    sets.push('progress_pct = 100', 'cur_lat = :lat', 'cur_lng = :lng', 'cur_speed_kmh = 0', 'eta_at = now()', 'delay_minutes = :late', 'last_position_at = now()');
+    Object.assign(r, { lat: dest.lat, lng: dest.lng, late });
+    msg = `Arrived at ${dest.name}${late > 15 ? ` (${late} min late)` : ''}`;
+  }
+  if (to === 'DELIVERED') {
+    const loaded = Number(t.loaded_mt ?? t.planned_load_mt);
+    if (!p.deliveredMt || p.deliveredMt <= 0) throw badRequest('Enter the delivered quantity.', { fields: { deliveredMt: 'Required' } });
+    if (p.deliveredMt > loaded + 0.5) throw unprocessable(`Delivered quantity (${p.deliveredMt} MT) cannot exceed the loaded quantity (${loaded} MT).`);
+    if (!p.receivedBy?.trim()) throw badRequest('Enter who received the delivery.', { fields: { receivedBy: 'Required' } });
+    sets.push('delivered_mt = :dmt', 'received_by = :rb', 'delivery_note_no = :dn', 'pod_notes = :pn');
+    Object.assign(r, { dmt: p.deliveredMt, rb: p.receivedBy, dn: p.deliveryNoteNo ?? null, pn: p.podNotes ?? null });
+    msg = `Delivered ${p.deliveredMt} MT, received by ${p.receivedBy}`;
+  }
+  if (to === 'RETURNING') { sets.push('progress_pct = 0', 'cur_speed_kmh = 0'); msg = 'Vehicle started return to plant'; }
+  if (tr.stamp && !sets.some((s) => s.startsWith(tr!.stamp!))) sets.push(`${tr.stamp} = now()`);
+  if (to === 'DISPATCHED' && from === 'ASSIGNED') {
+    // vehicle leaves the yard from its origin
+  }
+  if (p.note) msg += ` — ${p.note}`;
+
+  await exec(`UPDATE trips SET ${sets.join(', ')} WHERE id = :id`, r, tx);
+
+  // ----- side-effects on vehicle / driver -----
+  const busy = ['DISPATCHED'];
+  if (busy.includes(to) && vehicle && driver) {
+    const o = await q1<any>('SELECT lat, lng, id FROM locations WHERE id = :id', { id: t.origin_location_id }, tx);
+    await exec(`UPDATE vehicles SET status = 'ON_TRIP', last_lat = :lat, last_lng = :lng, last_location_id = :loc, last_speed_kmh = 0, last_position_at = now(), updated_at = now() WHERE id = :id`, { id: vehicle.id, lat: o.lat, lng: o.lng, loc: o.id }, tx);
+    await exec(`UPDATE drivers SET status = 'ON_TRIP', updated_at = now() WHERE id = :id`, { id: driver.id }, tx);
+  }
+  if ((to === 'COMPLETED' || to === 'CANCELLED') && (vehicle || driver)) {
+    const o = await q1<any>('SELECT lat, lng, id FROM locations WHERE id = :id', { id: t.origin_location_id }, tx);
+    if (vehicle && vehicle.status === 'ON_TRIP') {
+      const route = t.route_id ? await q1<any>('SELECT distance_km FROM routes WHERE id = :id', { id: t.route_id }, tx) : null;
+      const km = to === 'COMPLETED' && route ? Math.round(Number(route.distance_km) * 2) : 0;
+      await exec(`UPDATE vehicles SET status = 'AVAILABLE', odometer_km = odometer_km + :km, last_lat = :lat, last_lng = :lng, last_location_id = :loc, last_speed_kmh = 0, last_position_at = now(), updated_at = now() WHERE id = :id`, { id: vehicle.id, km, lat: o.lat, lng: o.lng, loc: o.id }, tx);
+    }
+    if (driver && driver.status === 'ON_TRIP') await exec(`UPDATE drivers SET status = 'AVAILABLE', updated_at = now() WHERE id = :id`, { id: driver.id }, tx);
+  }
+
+  await addEvent(tx, t.id, { type: 'STATUS_CHANGE', fromStatus: from, toStatus: to, message: msg, actor: user?.id ?? null, lat: p.lat, lng: p.lng, clientEventId: p.clientEventId });
+  await audit(req, {
+    action: to === 'CANCELLED' ? 'CANCEL' : to === 'DISPATCHED' ? 'DISPATCH' : to === 'COMPLETED' ? 'COMPLETE' : 'STATUS_CHANGE',
+    entityType: 'TRIP', entityId: t.id, entityLabel: t.code, meta: { from, to, reason: p.reason }, tx,
+    ...(user ? {} : { userId: undefined, email: 'system' }),
+  });
+
+  // ----- notifications -----
+  const base = { entityType: 'TRIP' as const, entityId: t.id, tx };
+  const driverUser = t.driver_id ? await q1<any>('SELECT id FROM users WHERE driver_id = :d', { d: t.driver_id }, tx) : null;
+  if (to === 'DISPATCHED') {
+    await notify({ ...base, type: 'TRIP_DISPATCHED', severity: 'INFO', title: `Trip ${t.code} dispatched`, body: msg, roles: AUDIENCE.OPS });
+    if (driverUser) await notify({ ...base, userId: driverUser.id, type: 'TRIP_ASSIGNED', severity: 'INFO', title: `New trip ${t.code} assigned to you`, body: 'Complete the pre-trip safety check and start the trip when loaded.' });
+  } else if (to === 'COMPLETED') await notify({ ...base, type: 'TRIP_COMPLETED', severity: 'SUCCESS', title: `Trip ${t.code} completed`, body: msg, roles: AUDIENCE.OPS });
+  else if (to === 'DELAYED') await notify({ ...base, type: 'TRIP_DELAYED', severity: 'WARNING', title: `Trip ${t.code} is delayed`, body: msg, roles: AUDIENCE.OPS });
+  else if (to === 'CANCELLED') await notify({ ...base, type: 'TRIP_CANCELLED', severity: 'WARNING', title: `Trip ${t.code} cancelled`, body: p.reason, roles: AUDIENCE.OPS });
+  else if (to === 'ON_HOLD') await notify({ ...base, type: 'TRIP_ON_HOLD', severity: 'WARNING', title: `Trip ${t.code} put on hold`, body: p.reason, roles: AUDIENCE.OPS });
+  else if (to === 'DELIVERED') await notify({ ...base, type: 'TRIP_DELIVERED', severity: 'SUCCESS', title: `Trip ${t.code} delivered`, body: msg, roles: AUDIENCE.OPS });
+}
+
+// ---------- Detail ----------
+
+export async function tripActions(t: any, user: AuthUser) {
+  const actions: { to: TripStatus; label: string; needs?: string[] }[] = [];
+  for (const tr of allowedTransitions(t.status, user.role)) {
+    if (tr.to === 'ASSIGNED') continue;
+    if (user.role === 'DRIVER' && t.driver_id !== user.driverId) continue;
+    if (user.role === 'DRIVER' && ['DISPATCHED', 'IN_TRANSIT', 'DELAYED', 'ARRIVED', 'DELIVERED', 'RETURNING'].includes(t.status) === false) continue;
+    // DRAFT->PLANNED requires nothing extra; ASSIGNED->PLANNED is "unassign"
+    actions.push({ to: tr.to, label: tr.label });
+  }
+  if (t.status === 'ON_HOLD' && t.status_before_hold && OPS_ROLES.includes(user.role)) actions.push({ to: t.status_before_hold, label: 'Resume' });
+  return actions;
+}
+
+export async function getTripDetail(id: number, user: AuthUser) {
+  const t = await q1<any>(
+    `SELECT t.*, v.code AS vehicle_code, v.registration_no, v.capacity_mt AS vehicle_capacity_mt, v.fleet_type AS vehicle_fleet_type,
+            d.full_name AS driver_name, d.phone AS driver_phone, d.employee_id AS driver_employee_id,
+            o.name AS origin_name, o.city AS origin_city, o.lat AS origin_lat, o.lng AS origin_lng,
+            dl.name AS destination_name, dl.city AS destination_city, dl.region AS destination_region, dl.lat AS destination_lat, dl.lng AS destination_lng,
+            di.name AS distributor_name, di.code AS distributor_code, di.contact_name AS distributor_contact, di.phone AS distributor_phone,
+            r.distance_km, r.est_duration_min, r.code AS route_code
+       FROM trips t JOIN locations o ON o.id = t.origin_location_id JOIN locations dl ON dl.id = t.destination_location_id
+       LEFT JOIN vehicles v ON v.id = t.vehicle_id LEFT JOIN drivers d ON d.id = t.driver_id
+       LEFT JOIN distributors di ON di.id = t.distributor_id LEFT JOIN routes r ON r.id = t.route_id
+      WHERE t.id = :id`, { id });
+  if (!t) throw notFound('Trip');
+  if (user.role === 'DRIVER' && t.driver_id !== user.driverId) throw forbidden('You can only view trips assigned to you.');
+  const [events, checks] = await Promise.all([
+    q<any>(`SELECT e.id, e.type, e.from_status, e.to_status, e.message, e.occurred_at, u.full_name AS actor_name
+              FROM trip_events e LEFT JOIN users u ON u.id = e.actor_user_id WHERE e.trip_id = :id ORDER BY e.occurred_at DESC, e.id DESC LIMIT 200`, { id }),
+    q<any>(`SELECT c.id, c.kind, c.result, c.items, c.notes, c.completed_at, u.full_name AS completed_by_name
+              FROM safety_checks c LEFT JOIN users u ON u.id = c.completed_by WHERE c.trip_id = :id ORDER BY c.completed_at DESC`, { id }),
+  ]);
+  return { trip: t, events, checks, actions: await tripActions(t, user) };
+}
+
+export { AppError };

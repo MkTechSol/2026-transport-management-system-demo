@@ -14,7 +14,8 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /repo/apps/api/dist ./dist
 COPY --from=build /repo/apps/api/src/db/migrations ./dist/migrations
-COPY apps/api/package.json ./
+# runtime image: minimal manifest (the shared package is bundled into dist, it is not on npm)
+RUN echo '{"name":"gasman-api-runtime","private":true,"type":"module"}' > package.json
 RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts bcryptjs compression cookie-parser cors dotenv express express-rate-limit helmet jsonwebtoken pg pg-hstore pino sequelize zod
 USER node
 EXPOSE 4000

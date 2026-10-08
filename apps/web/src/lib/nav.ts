@@ -1,5 +1,5 @@
 import type { Permission } from '@gasman/shared';
-import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardCheck, ClipboardList, Fuel as FuelIcon, FileText, Gauge, LayoutGrid, MapPin, Receipt, Settings as SettingsIcon, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound, Waypoints, BookOpen, Landmark, Banknote, FileSpreadsheet, Handshake } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Bell, Building2, ClipboardCheck, ClipboardList, Fuel as FuelIcon, FileText, Gauge, LayoutGrid, MapPin, Receipt, Settings as SettingsIcon, Shield, ShieldCheck, Store, Truck, Users, UserCog, Wrench, Route as RouteIcon, UserRound, Waypoints, BookOpen, Landmark, Banknote, FileSpreadsheet, Handshake, Boxes, ShoppingCart, CircleDot, PackageSearch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon; perm?: Permission[]; roles?: string[]; end?: boolean; hideFor?: string[] }
@@ -31,6 +31,12 @@ export const NAV: NavGroup[] = [
     { to: '/finance/vouchers', label: 'Vouchers', icon: Banknote, perm: ['finance:view'] },
     { to: '/finance/reports', label: 'Financial Reports', icon: BookOpen, perm: ['finance:view'] },
     { to: '/finance/accounts', label: 'Accounts & Banks', icon: Landmark, perm: ['finance:view'] },
+  ] },
+  { title: 'Inventory', items: [
+    { to: '/inventory', label: 'Items & Stock', icon: Boxes, perm: ['inventory:view'] },
+    { to: '/procurement', label: 'Procurement', icon: ShoppingCart, perm: ['procurement:view'] },
+    { to: '/tyres', label: 'Tyres', icon: CircleDot, perm: ['tyres:view'] },
+    { to: '/inventory/reports', label: 'Inventory Reports', icon: PackageSearch, perm: ['inventory:view'] },
   ] },
   { title: 'Compliance & Safety', items: [
     { to: '/maintenance', label: 'Maintenance', icon: Wrench, perm: ['maintenance:view'] },

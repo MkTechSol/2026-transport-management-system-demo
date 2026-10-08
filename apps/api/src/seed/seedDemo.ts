@@ -13,6 +13,7 @@ import { demoFreightPerMt } from '../lib/geo';
 import { PARTNER_OWNERS } from './data';
 import { seedSettings } from '../services/settings';
 import { seedFinance } from './financeSeed';
+import { seedInventory } from './inventorySeed';
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -30,8 +31,9 @@ export async function truncateAll() {
   await sequelize.query(`TRUNCATE notification_reads, notifications, audit_logs, trip_positions, trip_events, safety_checks, incidents, maintenance_records, documents,
     trip_expenses, fuel_entries, approvals, approval_rules, settings,
     voucher_allocations, voucher_lines, vouchers, voucher_counters, sales_invoice_lines, sales_invoices, sales_order_lines, sales_orders, banks, vendors,
+    stock_movements, stock_balances, stock_doc_lines, stock_docs, tyre_events, tyres, purchase_order_lines, purchase_orders, rfq_quote_lines, rfq_quotes, purchase_request_lines, purchase_requests, items, item_subcategories, item_categories, brands, warehouses,
     trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
-  await sequelize.query(`DELETE FROM accounts WHERE system_key IS NULL AND code LIKE '1120-%'; ALTER SEQUENCE invoice_no_seq RESTART; ALTER SEQUENCE sales_order_no_seq RESTART;`);
+  await sequelize.query(`DELETE FROM accounts WHERE system_key IS NULL AND code LIKE '1120-%'; ALTER SEQUENCE invoice_no_seq RESTART; ALTER SEQUENCE sales_order_no_seq RESTART; ALTER SEQUENCE stock_doc_seq RESTART; ALTER SEQUENCE pr_no_seq RESTART; ALTER SEQUENCE po_no_seq RESTART;`);
 }
 
 export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Promise<SeedSummary> {
@@ -542,6 +544,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     SELECT setval('trip_code_seq', ${trips.length});
     SELECT setval('incident_code_seq', ${incidents.length});`);
   await seedFinance({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
+  await seedInventory({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
   await generateComplianceAlerts();
   const summary = { users: users.length, vehicles: vehicles.length, drivers: drivers.length, distributors: distributors.length, trips: trips.length, events: events.length, documents: documents.length };
   if (log) logger.info(summary, 'demo seed complete');

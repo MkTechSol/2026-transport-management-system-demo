@@ -214,6 +214,58 @@ await step('T24 Operations roles cannot reach finance (UI hidden, API 403)', asy
   await X.goto(`${BASE}/finance/vouchers`); await X.getByText(/permission|not allowed|access/i).first().waitFor({ timeout: 8000 });
 });
 
+// ---- Inventory & procurement (store manager) ----
+const { page: S } = await session('store.manager@gasman-demo.local');
+const pickOption = async (sel, text) => { const v = await sel.locator('option', { hasText: text }).first().getAttribute('value'); await sel.selectOption(v); };
+await step('T25 Store manager sees stock KPIs, items and the low-stock filter', async () => {
+  await S.goto(`${BASE}/inventory`); await S.getByRole('heading', { name: 'Inventory' }).waitFor(); await S.getByText('Stock in stores').waitFor();
+  await S.locator('tbody tr').first().waitFor();
+  await S.goto(`${BASE}/inventory?low=1`); await S.getByText(/Low stock only/).waitFor(); await S.screenshot({ path: `${shots}/e2e-13-inventory.png` });
+});
+await step('T26 Navigation voucher moves an item from a store to a bowzer', async () => {
+  await S.goto(`${BASE}/inventory?tab=vouchers`);
+  await S.getByRole('button', { name: /New stock voucher/ }).click(); await S.getByRole('menuitem', { name: 'Navigation (transfer)' }).click();
+  const dlg = S.getByRole('dialog', { name: 'Navigation (transfer)' }); await dlg.waitFor();
+  await pickOption(dlg.getByLabel(/^From\s*\*?$/), 'Osakai Central'); await pickOption(dlg.getByLabel(/^To\s*\*?$/), 'GAS-BZ-001');
+  await pickOption(dlg.getByLabel('Item 1'), 'LGT-BULB'); await dlg.getByLabel('Qty 1').fill('1');
+  await S.keyboard.press('F10');
+  await S.getByText(/Navigation \(transfer\) NAV-\d+-\d+ posted/).waitFor({ timeout: 10000 });
+});
+await step('T27 Overdrawing stock is refused with a clear message', async () => {
+  await S.keyboard.press('Escape');
+  await S.getByRole('button', { name: /New stock voucher/ }).click(); await S.getByRole('menuitem', { name: 'Issue to bowzer' }).click();
+  const dlg = S.getByRole('dialog', { name: 'Issue to bowzer' }); await dlg.waitFor();
+  await pickOption(dlg.getByLabel(/^From store/), 'Osakai Central'); await pickOption(dlg.getByLabel(/^Bowzer\s*\*?$/), 'GAS-BZ-002');
+  await pickOption(dlg.getByLabel('Item 1'), 'OIL-ENG20'); await dlg.getByLabel('Qty 1').fill('99999');
+  await dlg.getByRole('button', { name: /Post voucher/ }).click();
+  await dlg.getByText(/Not enough stock/i).waitFor(); await dlg.getByRole('button', { name: 'Cancel' }).click();
+});
+await step('T28 Wheel map shows every position and a tyre can be fitted', async () => {
+  await S.goto(`${BASE}/tyres?tab=map`); await pickOption(S.getByLabel('Bowzer'), 'GAS-BZ-004');
+  await S.getByText('W1', { exact: true }).first().waitFor();
+  await S.getByRole('button', { name: /W1/ }).first().click();
+  const dlg = S.getByRole('dialog', { name: /Fit tyre at W1/ }); await dlg.waitFor();
+  await dlg.getByLabel('Tyre from store').selectOption({ index: 1 }); await S.keyboard.press('F10');
+  await S.getByText(/Tyre fitted — voucher PRP-/).waitFor({ timeout: 10000 });
+  await S.screenshot({ path: `${shots}/e2e-14-wheel-map.png` });
+});
+await step('T29 Requisition is created and sent for approval', async () => {
+  await S.goto(`${BASE}/procurement`); await S.getByRole('button', { name: 'New requisition' }).click();
+  const dlg = S.getByRole('dialog', { name: 'New purchase requisition' }); await dlg.waitFor();
+  await pickOption(dlg.getByLabel('Item 1'), 'FLT-FUEL'); await dlg.getByLabel('Qty 1').fill('12'); await S.keyboard.press('F10');
+  await S.getByText(/Requisition PR-\d+-\d+ submitted for approval/).waitFor({ timeout: 10000 });
+});
+await step('T30 Inventory reports render (stock navigation matrix, fitment matrix)', async () => {
+  await S.goto(`${BASE}/inventory/reports/stock-navigation`); await S.getByRole('heading', { name: 'Stock navigation' }).waitFor(); await S.getByRole('columnheader', { name: 'Total' }).waitFor();
+  await S.goto(`${BASE}/inventory/reports/vehicle-fitment-matrix`); await S.getByRole('columnheader', { name: /Cameras/ }).waitFor();
+  await S.goto(`${BASE}/inventory/reports/check-item-stock`); await S.getByText(/Choose an item/).waitFor();
+});
+await step('T31 Bowzer inventory tab, dispatcher cannot see inventory', async () => {
+  await A.goto(`${BASE}/fleet`); await A.locator('tbody tr').first().click(); await A.getByRole('tab', { name: /Inventory/ }).click(); await A.getByText('Fitted to this bowzer').waitFor();
+  const { page: X } = await session('dispatcher@gasman-demo.local');
+  if (await X.getByRole('link', { name: 'Items & Stock' }).count()) throw new Error('dispatcher sees Inventory nav');
+});
+
 await browser.close();
 console.log('\n=== SUMMARY ==='); const fails = results.filter((r) => r[0] === 'FAIL');
 console.log(`${results.length - fails.length}/${results.length} steps passed`); fails.forEach((f) => console.log(' FAIL:', f[1], '-', f[3]));

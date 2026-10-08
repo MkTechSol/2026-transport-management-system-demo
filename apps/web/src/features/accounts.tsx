@@ -11,6 +11,7 @@ import { StatusPill } from '../ui/Pill';
 import { ReceiptModal, ReportTable, money } from './finance';
 import { InvoiceDrawer, InvoiceModal } from '../pages/Invoices';
 import { VoucherDrawer } from '../pages/Vouchers';
+import { StockVoucherModal } from './stock';
 
 /** A bowzer is its own account: P&L and ledger from the vehicle dimension of the general ledger. */
 export function BowzerAccount({ vehicleId, code }: { vehicleId: number; code: string }) {
@@ -64,6 +65,36 @@ export function CustomerAccount({ customer }: { customer: any }) {
       {rcv && <ReceiptModal customer={customer} onClose={() => setRcv(false)} onSaved={() => { acc.refetch(); invoices.refetch(); led.refetch(); }} />}
       {open != null && <InvoiceDrawer id={open} onClose={() => { setOpen(null); acc.refetch(); invoices.refetch(); }} />}
       {voucher != null && <VoucherDrawer id={voucher} onClose={() => setVoucher(null)} />}
+    </div>
+  );
+}
+
+/** Everything fitted to, replaced on or consumed by one bowzer — items, tyres, parts history and fuel. */
+export function BowzerInventory({ vehicleId, code }: { vehicleId: number; code: string }) {
+  const { can } = useAuth(); const [modal, setModal] = useState<'PARTS_REPLACEMENT' | 'NAVIGATION' | null>(null);
+  const { data, isLoading, error, refetch } = useQuery({ queryKey: ['/inventory/vehicles', vehicleId], queryFn: () => get(`/inventory/vehicles/${vehicleId}`) });
+  if (isLoading) return <PageLoader />;
+  if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
+  const byCat = new Map<string, any[]>(); for (const f of data.fitted) { const l = byCat.get(f.category) ?? []; l.push(f); byCat.set(f.category, l); }
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-semibold">Fitted items, tyres &amp; spare-part history</h2>
+        {can('inventory:manage') && <div className="flex gap-2"><Button onClick={() => setModal('PARTS_REPLACEMENT')}>Replace a part</Button><Button onClick={() => setModal('NAVIGATION')}>Move an item</Button></div>}</div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiCard label="Fitted units" value={data.fitted.reduce((s: number, f: any) => s + f.qty, 0)} tone="blue" /><KpiCard label="Tyres on wheels" value={`${data.tyres.length}${data.vehicle.wheels ? ` / ${data.vehicle.wheels}` : ''}`} tone={data.vehicle.wheels && data.tyres.length < data.vehicle.wheels ? 'amber' : 'green'} />
+        <KpiCard label="Fuel fills" value={data.fuel.fills} hint={`${Math.round(data.fuel.litres).toLocaleString('en-US')} L · PKR ${Math.round(data.fuel.amount).toLocaleString('en-US')}`} tone="slate" /><KpiCard label="Average km/L" value={data.fuel.avg_kmpl ? data.fuel.avg_kmpl.toFixed(2) : '—'} tone="slate" />
+      </div>
+      <Section title="Fitted to this bowzer" padded={false}>
+        <table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="th">Category</th><th className="th">Item</th><th className="th text-right">Qty</th><th className="th text-right">Value</th><th className="th">Since</th></tr></thead>
+          <tbody className="divide-y divide-line">{[...byCat.entries()].flatMap(([cat, rows]) => rows.map((r, i) => <tr key={r.id}><td className="td text-slate-500">{i === 0 ? cat : ''}</td><td className="td font-medium">{r.name}</td><td className="td text-right tabular-nums">{r.qty} {r.unit}</td><td className="td text-right tabular-nums">{money(r.value)}</td><td className="td">{fmtDate(r.since)}</td></tr>))}
+            {!data.fitted.length && <tr><td colSpan={5} className="td py-8 text-center text-slate-500">Nothing recorded as fitted.</td></tr>}</tbody></table>
+      </Section>
+      <Section title="Tyres" padded={false}><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="th">Position</th><th className="th">Serial</th><th className="th">Tyre</th><th className="th text-right">Distance run</th><th className="th">Fitted</th></tr></thead>
+        <tbody className="divide-y divide-line">{data.tyres.map((t: any) => <tr key={t.id}><td className="td font-medium">{t.position}</td><td className="td">{t.serial_no}</td><td className="td">{t.item_name}</td><td className="td text-right tabular-nums">{Number(t.km_total).toLocaleString('en-US')} km</td><td className="td">{fmtDate(t.fitted_on)}</td></tr>)}{!data.tyres.length && <tr><td colSpan={5} className="td py-6 text-center text-slate-500">No serial-tracked tyres.</td></tr>}</tbody></table></Section>
+      <Section title="Replacements, issues & moves" padded={false}><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="th">Date</th><th className="th">Voucher</th><th className="th">Item</th><th className="th text-right">Qty</th><th className="th">Removed</th><th className="th text-right">Cost</th></tr></thead>
+        <tbody className="divide-y divide-line">{data.replaced.map((r: any, i: number) => <tr key={i}><td className="td whitespace-nowrap">{fmtDate(r.doc_date)}</td><td className="td">{r.doc_no}</td><td className="td">{r.item_name}</td><td className="td text-right tabular-nums">{r.qty}</td><td className="td text-xs">{r.removed_name ? `${r.removed_name} (${(r.remove_disposition ?? '').toLowerCase()})` : ''}{r.reason ? ` · ${r.reason}` : ''}</td><td className="td text-right tabular-nums">{money(r.value)}</td></tr>)}{!data.replaced.length && <tr><td colSpan={6} className="td py-6 text-center text-slate-500">No history yet.</td></tr>}</tbody></table></Section>
+      {modal && <StockVoucherModal type={modal} preset={modal === 'PARTS_REPLACEMENT' ? { vehicleId: String(vehicleId) } : undefined} onClose={() => { setModal(null); refetch(); }} />}
+      <p className="text-xs text-slate-500">{code}: values use the item's moving-average cost.</p>
     </div>
   );
 }

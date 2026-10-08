@@ -59,6 +59,19 @@ export default function ControlTower() {
               <KpiCard label="Fuel exceptions" value={data.finance.fuelFlagged} hint="Flagged for review" tone={data.finance.fuelFlagged ? 'amber' : 'slate'} to="/fuel?tab=exceptions" />
             </div>
           )}
+          {data?.finance?.treasury && (
+            <div className="grid gap-3 lg:grid-cols-3">
+              <Section title="Bank reserves" subtitle={`Cash in hand PKR ${Math.round(data.finance.treasury.cash).toLocaleString('en-US')}`} actions={<Link to="/finance/accounts?tab=banks" className="text-sm font-medium text-brand-700 hover:underline">Banks</Link>}>
+                <ul className="space-y-1.5 text-sm">{data.finance.treasury.banks.map((b: any) => <li key={b.name} className="flex justify-between gap-3"><span className="truncate">{b.name}</span><span className="tabular-nums font-medium">{Math.round(b.balance).toLocaleString('en-US')}</span></li>)}
+                  <li className="flex justify-between gap-3 border-t border-line pt-1.5 font-semibold"><span>Total in banks</span><span className="tabular-nums">{data.finance.treasury.bankTotal.toLocaleString('en-US')}</span></li></ul></Section>
+              <Section title="Receivables & payables" actions={<Link to="/finance/reports/receivable-aging" className="text-sm font-medium text-brand-700 hover:underline">Aging</Link>}>
+                <dl className="space-y-1.5 text-sm"><div className="flex justify-between"><dt>To collect</dt><dd className="tabular-nums font-semibold">PKR {Math.round(data.finance.treasury.receivable).toLocaleString('en-US')}</dd></div>
+                  <div className="flex justify-between text-red-700"><dt>Overdue ({data.finance.treasury.overdueInvoices} invoices)</dt><dd className="tabular-nums font-semibold">PKR {Math.round(data.finance.treasury.overdue).toLocaleString('en-US')}</dd></div>
+                  <div className="flex justify-between"><dt>To pay vendors</dt><dd className="tabular-nums font-semibold">PKR {Math.round(data.finance.treasury.payable).toLocaleString('en-US')}</dd></div></dl></Section>
+              <Section title="Credit watch" subtitle="Customers near or over their limit" actions={<Link to="/customers?tab=parties" className="text-sm font-medium text-brand-700 hover:underline">Customers</Link>}>
+                {data.finance.creditWatch.length ? <ul className="space-y-2 text-sm">{data.finance.creditWatch.map((c: any) => <li key={c.id}><Link to={`/distributors/${c.id}`} className="flex justify-between gap-3 hover:underline"><span className="truncate">{c.name}</span><span className={c.pct >= 100 ? 'font-semibold text-red-600' : 'font-semibold text-amber-600'}>{c.pct}%</span></Link></li>)}</ul> : <p className="text-sm text-slate-500">All customers are within their credit limits.</p>}</Section>
+            </div>
+          )}
           <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
             <Section title="Live trip operations" subtitle="Current movement and assignment status" padded={false} actions={<Link to="/trips?scope=active" className="text-sm font-medium text-brand-700 hover:underline">View all trips</Link>}>
               <div className="overflow-x-auto">

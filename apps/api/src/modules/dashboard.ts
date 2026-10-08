@@ -119,8 +119,18 @@ async function financeBlock(plantId?: number) {
       LEFT JOIN (SELECT ${localDate('t.delivered_at')} AS dd, sum(t.delivered_mt * t.freight_per_mt) AS v FROM trips t WHERE t.delivered_at >= now() - interval '15 days' ${tp} GROUP BY 1) i ON i.dd = d::date
       LEFT JOIN (SELECT e.incurred_on AS dd, sum(e.amount) AS v FROM trip_expenses e JOIN trips t ON t.id = e.trip_id WHERE e.status IN ('APPROVED','REIMBURSED') AND e.incurred_on >= CURRENT_DATE - 14 ${tp} GROUP BY 1) x ON x.dd = d::date
       ORDER BY d`, r);
+  const banks = await q(`SELECT b.name, COALESCE(sum(l.debit - l.credit), 0)::float AS balance FROM banks b LEFT JOIN voucher_lines l ON l.account_id = b.account_id LEFT JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE b.active GROUP BY b.id ORDER BY balance DESC`);
+  const [bal] = await q(`SELECT COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'cash'), 0)::float AS cash,
+      COALESCE(sum(l.debit - l.credit) FILTER (WHERE a.system_key = 'receivable'), 0)::float AS receivable, COALESCE(sum(l.credit - l.debit) FILTER (WHERE a.system_key = 'payable'), 0)::float AS payable
+    FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' JOIN accounts a ON a.id = l.account_id WHERE a.system_key IN ('cash','receivable','payable')`);
+  const [od] = await q(`SELECT COALESCE(sum(total - paid), 0)::float AS overdue, count(*)::int AS n FROM sales_invoices WHERE kind = 'INVOICE' AND status IN ('UNPAID','PARTIAL') AND due_date < CURRENT_DATE`);
+  const creditWatch = await q(`SELECT d.id, d.name, d.credit_limit_pkr::float AS credit_limit, d.credit_alert_pct, x.bal::float AS balance, round(x.bal / d.credit_limit_pkr * 100)::int AS pct
+      FROM distributors d JOIN LATERAL (SELECT sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' WHERE l.party_type = 'CUSTOMER' AND l.party_id = d.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) x ON true
+     WHERE d.credit_limit_pkr > 0 AND x.bal >= d.credit_limit_pkr * d.credit_alert_pct / 100.0 ORDER BY pct DESC LIMIT 5`);
+  const treasury = { cash: bal.cash, banks, bankTotal: Math.round(banks.reduce((s: number, b: any) => s + b.balance, 0)), receivable: bal.receivable, overdue: od.overdue, overdueInvoices: od.n, payable: bal.payable };
   const profit = m.income_mtd - e.expenses_mtd;
-  return { incomeMtd: m.income_mtd, incomePrevMonth: m.income_prev, expensesMtd: e.expenses_mtd, expensesPrevMonth: e.expenses_prev, profitMtd: profit, marginPct: m.income_mtd > 0 ? Math.round((profit / m.income_mtd) * 1000) / 10 : null,
+  const rd = Math.round;
+  return { treasury, creditWatch, incomeMtd: rd(m.income_mtd), incomePrevMonth: rd(m.income_prev), expensesMtd: rd(e.expenses_mtd), expensesPrevMonth: rd(e.expenses_prev), profitMtd: rd(profit), marginPct: m.income_mtd > 0 ? Math.round((profit / m.income_mtd) * 1000) / 10 : null,
     pendingExpenseAmount: e.pending_amount, pendingExpenseCount: e.pending_count, fuelFlagged: fl.flagged, daily };
 }
 

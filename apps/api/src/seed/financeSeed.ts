@@ -61,9 +61,8 @@ export async function seedFinance(c: { rng: Rng; NOW: number; log?: (m: string) 
     lines: [
       { accountKey: 'cash', debit: 1_850_000 },
       { accountId: banks[0].account_id, debit: 38_400_000 }, { accountId: banks[1].account_id, debit: 21_250_000 }, { accountId: banks[2].account_id, debit: 9_600_000 },
-      { accountKey: 'inventory', debit: 3_200_000 },
       ...bowzers.map((b: any) => ({ accountKey: 'vehicles_asset', debit: 18_000_000, vehicleId: b.id, memo: `Bowzer ${b.code} at cost` })),
-      { accountKey: 'capital', credit: 1_850_000 + 38_400_000 + 21_250_000 + 9_600_000 + 3_200_000 + 18_000_000 * bowzers.length },
+      { accountKey: 'capital', credit: 1_850_000 + 38_400_000 + 21_250_000 + 9_600_000 + 18_000_000 * bowzers.length },
     ],
   });
 
@@ -138,13 +137,34 @@ export async function seedFinance(c: { rng: Rng; NOW: number; log?: (m: string) 
     { type: 'CASH_PAYMENT', date: dayStr(-9), narration: 'Office stationery and printing', lines: [{ accountKey: 'exp_office', debit: 18_500 }, { accountKey: 'cash', credit: 18_500 }] },
     { type: 'BANK_PAYMENT', date: dayStr(-14), narration: 'Electricity and internet — head office', lines: [{ accountKey: 'exp_office', debit: 96_400 }, { accountId: bank0, credit: 96_400 }] },
     { type: 'BANK_PAYMENT', date: dayStr(-20), narration: 'Annual vehicle insurance instalment', lines: [{ accountKey: 'exp_insurance', debit: 640_000 }, { accountId: bank0, credit: 640_000 }], partyType: 'VENDOR', partyId: vendors.find((v: any) => v.name.includes('Insurance'))?.id },
-    { type: 'JOURNAL', date: dayStr(-5), narration: 'Reclassify camera purchase from expenses to inventory', lines: [{ accountKey: 'inventory', debit: 210_000 }, { accountKey: 'exp_parts', credit: 210_000 }] },
     { type: 'BANK_PAYMENT', date: dayStr(-3), narration: 'Bank charges for the month', lines: [{ accountKey: 'exp_bank', debit: 7_850 }, { accountId: bank0, credit: 7_850 }] },
     { type: 'CASH_RECEIPT', date: dayStr(-2), narration: 'Scrap sale — old tyres', lines: [{ accountKey: 'other_income', credit: 42_000 }, { accountKey: 'cash', debit: 42_000 }] },
   ];
   for (const m of manual) await postVoucher(m);
   // 6) a cash deposit moving cash to bank
   await postVoucher({ type: 'JOURNAL', date: dayStr(-6), narration: 'Cash deposited to bank', lines: [{ accountId: bank0, debit: 300_000 }, { accountKey: 'cash', credit: 300_000 }] });
+
+  // 7) cash imprest: trip expenses are paid in cash, so the finance team withdraws cash from the bank at the start of each week to cover it
+  const cashId = await accountId('cash');
+  const weeks = await q<any>(`SELECT date_trunc('week', v.voucher_date)::date::text AS wk, sum(l.credit - l.debit)::float AS net_out FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED' AND v.type <> 'OPENING'
+      WHERE l.account_id = :c GROUP BY 1 ORDER BY 1`, { c: cashId });
+  let cashBal = 1_850_000;
+  for (const w of weeks) {
+    const need = Math.max(0, w.net_out - cashBal + 500_000);
+    const draw = Math.ceil(need / 50_000) * 50_000;
+    if (draw > 0) {
+      const d = w.wk < openDate ? openDate : w.wk;
+      await postVoucher({ type: 'JOURNAL', date: d, narration: 'Cash withdrawn from bank for trip imprest', lines: [{ accountKey: 'cash', debit: draw }, { accountId: banks[0].account_id, credit: draw }] });
+      cashBal += draw;
+    }
+    cashBal -= w.net_out;
+  }
+
+  // 8) make the credit watch interesting: two customers over/near their limit, one just past the alert threshold
+  const top = await q<any>(`SELECT d.id, x.bal::float AS bal FROM distributors d JOIN LATERAL (SELECT sum(l.debit - l.credit) AS bal FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'POSTED'
+      WHERE l.party_type = 'CUSTOMER' AND l.party_id = d.id AND l.account_id = (SELECT id FROM accounts WHERE system_key = 'receivable')) x ON true WHERE d.customer_type = 'DISTRIBUTOR' AND x.bal > 0 ORDER BY x.bal DESC LIMIT 3`);
+  const pct = [1.08, 0.94, 0.83];
+  for (const [i, t] of top.entries()) await exec(`UPDATE distributors SET credit_limit_pkr = :l, credit_alert_pct = 80, credit_status = :cs WHERE id = :id`, { l: Math.ceil(t.bal / pct[i] / 10_000) * 10_000, cs: i === 0 ? 'WATCH' : 'GOOD', id: t.id });
 
   // a couple of open sales orders for the order list / pending-orders view
   const so = await q<any>(`SELECT id FROM distributors WHERE customer_type = 'DISTRIBUTOR' ORDER BY id LIMIT 4`);

@@ -40,6 +40,10 @@ const Accounts = lazy(() => import('./pages/Accounts'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Vendors = lazy(() => import('./pages/Vendors'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const InventoryReports = lazy(() => import('./pages/InventoryReports'));
+const Procurement = lazy(() => import('./pages/Procurement'));
+const Tyres = lazy(() => import('./pages/Tyres'));
 
 class Boundary extends Component<{ children: ReactNode }, { err: boolean }> {
   state = { err: false };
@@ -91,6 +95,11 @@ export default function App() {
             <Route path="finance/reports/:key" element={P(['finance:view'], <FinanceReports />)} />
             <Route path="finance/accounts" element={P(['finance:view'], <Accounts />)} />
             <Route path="vendors" element={P(['vendors:view'], <Vendors />)} />
+            <Route path="inventory" element={P(['inventory:view'], <Inventory />)} />
+            <Route path="inventory/reports" element={<Navigate to="/inventory/reports/inventory-summary" replace />} />
+            <Route path="inventory/reports/:key" element={P(['inventory:view'], <InventoryReports />)} />
+            <Route path="procurement" element={P(['procurement:view'], <Procurement />)} />
+            <Route path="tyres" element={P(['tyres:view'], <Tyres />)} />
             <Route path="settings" element={P(['settings:view'], <Settings />)} />
             <Route path="audit" element={P(['audit:view'], <Audit />)} />
             <Route path="users" element={P(['users:view'], <Users />)} />

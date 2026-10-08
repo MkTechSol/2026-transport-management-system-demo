@@ -10,7 +10,7 @@ import { Button } from '../ui/Button';
 import { Alert, ErrorState, PageLoader, ProgressBar } from '../ui/Feedback';
 import { ConfirmDialog } from '../ui/Overlay';
 import { KV, KVGrid, PageHeader, Section, Tabs } from '../ui/Page';
-import { BowzerAccount } from '../features/accounts';
+import { BowzerAccount, BowzerInventory } from '../features/accounts';
 import { Pill, StatusPill } from '../ui/Pill';
 import { MapView } from '../map/MapView';
 import { DocumentModal, MaintenanceModal, VehicleForm } from '../features/forms';
@@ -37,7 +37,7 @@ export default function VehicleDetail() {
         </>} />
       {issues.length > 0 && <Alert tone={issues.some((d: any) => d.status === 'EXPIRED') ? 'danger' : 'warning'} className="mb-4" title="Compliance attention needed">{issues.map((d: any) => <p key={d.id}>{DOC_TYPE_LABELS[d.doc_type]}: {d.status === 'EXPIRED' ? `expired ${Math.abs(d.days_left)} days ago` : `expires in ${d.days_left} days`} ({fmtDate(d.expires_on)}) — vehicles with expired required documents cannot be assigned to trips.</p>)}</Alert>}
       {ct && <Alert tone="info" className="mb-4" title={`Currently on ${ct.code}`}>Heading to {ct.destination_name} · {Math.round(ct.progress_pct)}% · <Link className="font-semibold underline" to={`/trips/${ct.id}`}>Open trip</Link></Alert>}
-      <Tabs value={tab} onChange={(k) => setSp({ tab: k }, { replace: true })} tabs={[{ key: 'overview', label: 'Overview' }, { key: 'documents', label: 'Documents', count: documents.length }, { key: 'maintenance', label: 'Maintenance', count: maintenance.length }, { key: 'trips', label: 'Trip history' }, { key: 'safety', label: 'Safety' }, ...(can('finance:view') ? [{ key: 'account', label: 'Account (P&L)' }] : [])]} />
+      <Tabs value={tab} onChange={(k) => setSp({ tab: k }, { replace: true })} tabs={[{ key: 'overview', label: 'Overview' }, { key: 'documents', label: 'Documents', count: documents.length }, { key: 'maintenance', label: 'Maintenance', count: maintenance.length }, { key: 'trips', label: 'Trip history' }, { key: 'safety', label: 'Safety' }, ...(can('inventory:view') ? [{ key: 'inventory', label: 'Inventory & tyres' }] : []), ...(can('finance:view') ? [{ key: 'account', label: 'Account (P&L)' }] : [])]} />
       {tab === 'overview' && (
         <div className="grid gap-5 lg:grid-cols-3">
           <Section title="Specification" className="lg:col-span-2"><KVGrid cols={3}>
@@ -54,6 +54,7 @@ export default function VehicleDetail() {
           {v.last_lat != null && <Section title="Position" className="lg:col-span-3" padded={false}><div className="p-3"><MapView height={280} markers={[{ id: 'v', lat: v.last_lat, lng: v.last_lng, tone: v.status === 'ON_TRIP' ? 'blue' : 'slate', selected: true, label: v.code }]} fitKey={String(v.id)} /></div></Section>}
         </div>
       )}
+      {tab === 'inventory' && can('inventory:view') && <BowzerInventory vehicleId={v.id} code={v.code} />}
       {tab === 'account' && can('finance:view') && <BowzerAccount vehicleId={v.id} code={v.code} />}
       {tab === 'documents' && (
         <Section padded={false} title="Documents" subtitle="Newest document of each type is current" actions={can('documents:manage') && <Button size="sm" variant="primary" onClick={() => setDoc(null)}>Add / renew</Button>}>

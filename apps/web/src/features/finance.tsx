@@ -139,7 +139,7 @@ export function ReportTable({ report, onRowClick, fileName }: { report: ReportDa
           <tbody className="divide-y divide-line">
             {report.rows.map((r, i) => (
               <tr key={i} className={clsx(onRowClick && r.voucher_id && 'cursor-pointer hover:bg-brand-50/50', r.bold && 'bg-slate-50 font-semibold', r.opening && 'italic text-slate-500')} onClick={() => r.voucher_id && onRowClick?.(r)}>
-                {report.columns.map((c) => <td key={c.key} className={clsx('td', ['money', 'num', 'pct'].includes(c.type ?? '') && 'text-right tabular-nums', c.type === 'money' && Number(r[c.key]) < 0 && 'text-red-600')}>{cell(c, r[c.key])}</td>)}
+                {report.columns.map((c) => <td key={c.key} className={clsx('td', ['money', 'num', 'pct'].includes(c.type ?? '') && 'text-right tabular-nums', (c.type === 'date' || ['vehicle', 'code', 'voucher_no', 'doc_no', 'serial_no', 'month'].includes(c.key)) && 'whitespace-nowrap', c.type === 'money' && Number(r[c.key]) < 0 && 'text-red-600')}>{cell(c, r[c.key])}</td>)}
               </tr>
             ))}
             {!report.rows.length && <tr><td className="td py-10 text-center text-slate-500" colSpan={report.columns.length}>No data for this period.</td></tr>}

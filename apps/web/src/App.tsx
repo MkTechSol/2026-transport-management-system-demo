@@ -40,6 +40,12 @@ const Accounts = lazy(() => import('./pages/Accounts'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Vendors = lazy(() => import('./pages/Vendors'));
+const SetupHub = lazy(() => import('./pages/SetupHub'));
+const ManagerHome = lazy(() => import('./pages/ManagerHome'));
+const Exceptions = lazy(() => import('./pages/Exceptions'));
+const HR = lazy(() => import('./pages/HR'));
+const TripVouchers = lazy(() => import('./pages/TripVouchers'));
+const TripVoucherPrint = lazy(() => import('./pages/TripVouchers').then((m) => ({ default: m.TripVoucherPrint })));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const InventoryReports = lazy(() => import('./pages/InventoryReports'));
 const Procurement = lazy(() => import('./pages/Procurement'));
@@ -70,6 +76,9 @@ export default function App() {
             <Route path="trips" element={P(['trips:view'], <Trips />)} />
             <Route path="trips/new" element={P(['trips:create'], <TripNew />)} />
             <Route path="trips/:id" element={P(['trips:view'], <TripDetail />)} />
+            <Route path="trips/:id/voucher" element={P(['trips:view'], <TripVoucherPrint />)} />
+            <Route path="trip-vouchers" element={<Navigate to="/trip-vouchers/trip-start" replace />} />
+            <Route path="trip-vouchers/:key" element={P(['trips:view'], <TripVouchers />)} />
             <Route path="dispatch" element={P(['trips:assign', 'trips:dispatch'], <Dispatch />)} />
             <Route path="tracking" element={P(['tracking:view'], <Tracking />)} />
             <Route path="fleet" element={P(['vehicles:view'], <Fleet />)} />
@@ -100,6 +109,10 @@ export default function App() {
             <Route path="inventory/reports/:key" element={P(['inventory:view'], <InventoryReports />)} />
             <Route path="procurement" element={P(['procurement:view'], <Procurement />)} />
             <Route path="tyres" element={P(['tyres:view'], <Tyres />)} />
+            <Route path="exceptions" element={P(['exceptions:view'], <Exceptions />)} />
+            <Route path="setup" element={P(['settings:view'], <SetupHub />)} />
+            <Route path="m" element={P(['dashboard:view'], <ManagerHome />)} />
+            <Route path="hr" element={P(['hr:view'], <HR />)} />
             <Route path="settings" element={P(['settings:view'], <Settings />)} />
             <Route path="audit" element={P(['audit:view'], <Audit />)} />
             <Route path="users" element={P(['users:view'], <Users />)} />

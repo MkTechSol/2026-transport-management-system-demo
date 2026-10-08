@@ -37,6 +37,12 @@ import { vendorsRouter } from './modules/vendors';
 import { inventoryRouter } from './modules/inventory';
 import { procurementRouter } from './modules/procurement';
 import { tyresRouter } from './modules/tyres';
+import { tripVouchersRouter } from './modules/tripvouchers';
+import { hrRouter } from './modules/hr';
+import { exceptionsRouter } from './modules/exceptions';
+import { assistantRouter } from './modules/assistant';
+import { setupRouter } from './modules/setup';
+import './services/hr';
 import { registerFinanceHooks } from './services/sales';
 import { sequelize } from './db/sequelize';
 
@@ -85,6 +91,11 @@ export function createApp() {
   api.use('/inventory', inventoryRouter);
   api.use('/procurement', procurementRouter);
   api.use('/tyres', tyresRouter);
+  api.use('/trip-vouchers', tripVouchersRouter);
+  api.use('/hr', hrRouter);
+  api.use('/exceptions', exceptionsRouter);
+  api.use('/assistant', assistantRouter);
+  api.use('/setup', setupRouter);
   api.use('/trips', tripsRouter);
   api.use('/tracking', trackingRouter);
   api.use('/maintenance', maintenanceRouter);

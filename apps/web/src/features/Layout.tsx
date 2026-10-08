@@ -14,6 +14,7 @@ import { ConfirmDialog, Modal } from '../ui/Overlay';
 import { useToast } from '../ui/Toast';
 import { useAction } from '../lib/hooks';
 import { GlobalSearch } from './GlobalSearch';
+import { AssistantButton } from './Assistant';
 
 function Logo() {
   return (
@@ -133,6 +134,7 @@ export function Layout() {
           <div className="hidden xl:block"><p className="text-sm font-semibold leading-tight text-white">GASMAN TRANSPORT</p><p className="text-[11px] leading-tight text-white/75">LPG Logistics · {new Date().getFullYear()}</p></div>
           <div className="flex flex-1 justify-center"><GlobalSearch /></div>
           {demo.data?.demo && <span className="hidden rounded border border-white/60 px-2 py-1 text-[10px] font-bold tracking-widest text-white sm:inline">DEMO</span>}
+          <AssistantButton />
           <Bell_ />
           <UserMenu />
         </header>

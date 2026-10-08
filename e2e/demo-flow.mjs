@@ -210,7 +210,7 @@ await step('T23 Bowzer account tab shows P&L and ledger; customer account shows 
 });
 await step('T24 Operations roles cannot reach finance (UI hidden, API 403)', async () => {
   const { page: X } = await session('dispatcher@gasman-demo.local');
-  if (await X.getByRole('link', { name: 'Vouchers' }).count()) throw new Error('dispatcher sees Vouchers nav');
+  if (await X.getByRole('link', { name: 'Vouchers', exact: true }).count()) throw new Error('dispatcher sees Vouchers nav');
   await X.goto(`${BASE}/finance/vouchers`); await X.getByText(/permission|not allowed|access/i).first().waitFor({ timeout: 8000 });
 });
 
@@ -264,6 +264,45 @@ await step('T31 Bowzer inventory tab, dispatcher cannot see inventory', async ()
   await A.goto(`${BASE}/fleet`); await A.locator('tbody tr').first().click(); await A.getByRole('tab', { name: /Inventory/ }).click(); await A.getByText('Fitted to this bowzer').waitFor();
   const { page: X } = await session('dispatcher@gasman-demo.local');
   if (await X.getByRole('link', { name: 'Items & Stock' }).count()) throw new Error('dispatcher sees Inventory nav');
+});
+
+// ---- People, insights & setup ----
+const { page: H } = await session('hr.manager@gasman-demo.local');
+await step('T32 HR manager opens employees, attendance and the payroll draft (salaries visible to payroll managers)', async () => {
+  await H.goto(`${BASE}/hr`); await H.getByRole('heading', { name: 'HR & Payroll' }).waitFor(); await H.getByText('Headcount').waitFor(); await H.locator('tbody tr').first().waitFor();
+  await H.getByRole('tab', { name: 'Attendance' }).click(); await H.getByRole('button', { name: 'Mark everyone present today' }).waitFor();
+  await H.getByRole('tab', { name: 'Payroll' }).click(); await H.getByText(/Prepare \/ rebuild draft/).waitFor(); await H.locator('tbody tr').first().click(); await H.getByText(/Net payable|Trip bonus/).first().waitFor();
+});
+await step('T33 Exceptions Center lists live issues and an item can be marked reviewed', async () => {
+  await A.goto(`${BASE}/exceptions`); await A.getByRole('heading', { name: 'Exceptions Center' }).waitFor(); await A.getByText('Critical', { exact: true }).waitFor();
+  const first = A.locator('li').filter({ has: A.getByRole('button', { name: 'Mark reviewed' }) }).first(); const title = await first.locator('p').first().innerText();
+  await first.getByRole('button', { name: 'Mark reviewed' }).click(); const dlg = A.getByRole('dialog', { name: 'Mark as reviewed' }); await dlg.getByLabel(/Note/).fill('e2e check'); await A.keyboard.press('F10');
+  await A.getByText('Marked as reviewed.').waitFor(); if (await A.getByText(title, { exact: true }).count()) throw new Error('reviewed item still listed');
+});
+await step('T34 Ask GasMan answers from live data and is labelled as a demo assistant', async () => {
+  await A.goto(`${BASE}/`); await A.getByRole('button', { name: 'Ask GasMan assistant' }).click();
+  const dlg = A.getByRole('dialog', { name: 'Ask GasMan' }); await dlg.waitFor(); await dlg.getByText(/not a language model/i).waitFor();
+  await dlg.getByLabel('Ask a question').fill('Which trips are delayed?'); await dlg.getByRole('button', { name: 'Send question' }).click();
+  await dlg.getByText(/delayed or on hold|No trips are delayed/).waitFor({ timeout: 10000 });
+  await dlg.getByLabel('Ask a question').fill('Give me today’s briefing'); await dlg.getByRole('button', { name: 'Send question' }).click(); await dlg.getByText('Daily briefing').waitFor({ timeout: 10000 });
+  await A.screenshot({ path: `${shots}/e2e-15-assistant.png` }); await A.keyboard.press('Escape');
+});
+await step('T35 Setup hub: master lists, expense definitions, data integrity all green', async () => {
+  await A.goto(`${BASE}/setup`); await A.getByRole('heading', { name: 'Setup' }).waitFor(); await A.getByText('Chart of accounts').first().waitFor();
+  await A.getByRole('tab', { name: 'Trip expense definitions' }).click(); await A.getByLabel('Default amount for Toll / road tax').waitFor();
+  await A.getByRole('tab', { name: 'Data integrity' }).click(); await A.getByText('All checks passed').waitFor({ timeout: 10000 });
+});
+await step('T36 Trip voucher registers and printable trip voucher', async () => {
+  await A.goto(`${BASE}/trip-vouchers/uplifting`); await A.getByRole('heading', { name: 'Uplifting vouchers' }).waitFor(); await A.getByRole('button', { name: 'CSV' }).waitFor();
+  await A.goto(`${BASE}/trip-vouchers/tour-stay`); await A.getByRole('heading', { name: 'Tour stay details' }).waitFor();
+  await A.goto(`${BASE}/trip-vouchers/trip-completion`); await A.getByRole('columnheader', { name: 'Freight income' }).waitFor();
+  await A.goto(`${BASE}/trips?status=COMPLETED`); await A.locator('tbody tr').first().click(); await A.getByRole('button', { name: 'Trip voucher' }).click(); await A.getByText('TRIP VOUCHER', { exact: true }).waitFor(); await A.getByRole('button', { name: 'Print voucher' }).waitFor();
+});
+await step('T37 Manager mobile home on a phone: approvals with big buttons', async () => {
+  const { page: M2 } = await session('transport.manager@gasman-demo.local', { width: 390, height: 844 });
+  await M2.goto(`${BASE}/m`); await M2.getByText('Active trips').waitFor(); await M2.getByText(/Waiting for your decision/).waitFor();
+  const w = await M2.evaluate(() => document.documentElement.scrollWidth); if (w > 395) throw new Error('horizontal scroll on phone: ' + w);
+  await M2.screenshot({ path: `${shots}/e2e-16-manager-mobile.png` });
 });
 
 await browser.close();

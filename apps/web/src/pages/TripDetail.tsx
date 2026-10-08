@@ -48,6 +48,7 @@ export default function TripDetail() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {t.public_token && !['DRAFT', 'CANCELLED'].includes(status) && <Button icon={<Copy className="h-4 w-4" />} onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/track/${t.public_token}`); toast('success', 'Customer tracking link copied.'); }}>Tracking link</Button>}
+          {t.departed_at && <Button onClick={() => nav(`/trips/${t.id}/voucher`)}>Trip voucher</Button>}
           {editable && <Button icon={<Pencil className="h-4 w-4" />} onClick={() => setEdit(true)}>Edit</Button>}
           <TripActionBar trip={t} actions={actions} hasPassedPretrip={passed} onChanged={() => refetch()} autoAssign={sp.get('assign') === '1'} />
         </div>

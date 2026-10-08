@@ -14,6 +14,7 @@ import { PARTNER_OWNERS } from './data';
 import { seedSettings } from '../services/settings';
 import { seedFinance } from './financeSeed';
 import { seedInventory } from './inventorySeed';
+import { seedHr } from './hrSeed';
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -31,7 +32,7 @@ export async function truncateAll() {
   await sequelize.query(`TRUNCATE notification_reads, notifications, audit_logs, trip_positions, trip_events, safety_checks, incidents, maintenance_records, documents,
     trip_expenses, fuel_entries, approvals, approval_rules, settings,
     voucher_allocations, voucher_lines, vouchers, voucher_counters, sales_invoice_lines, sales_invoices, sales_order_lines, sales_orders, banks, vendors,
-    stock_movements, stock_balances, stock_doc_lines, stock_docs, tyre_events, tyres, purchase_order_lines, purchase_orders, rfq_quote_lines, rfq_quotes, purchase_request_lines, purchase_requests, items, item_subcategories, item_categories, brands, warehouses,
+    stock_movements, stock_balances, stock_doc_lines, stock_docs, tyre_events, tyres, purchase_order_lines, purchase_orders, rfq_quote_lines, rfq_quotes, purchase_request_lines, purchase_requests, items, item_subcategories, item_categories, brands, warehouses, payroll_lines, payroll_runs, leave_requests, attendance, employees, departments, exception_acks,
     trips, refresh_tokens, users, vehicles, drivers, routes, distributors, locations RESTART IDENTITY CASCADE`);
   await sequelize.query(`DELETE FROM accounts WHERE system_key IS NULL AND code LIKE '1120-%'; ALTER SEQUENCE invoice_no_seq RESTART; ALTER SEQUENCE sales_order_no_seq RESTART; ALTER SEQUENCE stock_doc_seq RESTART; ALTER SEQUENCE pr_no_seq RESTART; ALTER SEQUENCE po_no_seq RESTART;`);
 }
@@ -181,7 +182,7 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
   const histVehicles = vehicles.filter((v) => v.id !== 26);
   let imported = 0;
   for (let day = -90; day <= -1; day++) {
-    const k = rng.chance(0.96) ? rng.int(1, 3) : 0;
+    const k = rng.chance(0.96) ? rng.int(3, 6) : 0;
     for (let j = 0; j < k; j++) {
       const isUplift = rng.chance(0.28);
       const dist = distributors[(rng.int(0, distributors.length - 1) * 5 + rng.int(0, 3)) % distributors.length];
@@ -544,7 +545,10 @@ export async function seedDemo(opts: { anchor?: Date; log?: boolean } = {}): Pro
     SELECT setval('trip_code_seq', ${trips.length});
     SELECT setval('incident_code_seq', ${incidents.length});`);
   await seedFinance({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
+  await sequelize.query(`UPDATE fiscal_years SET status = 'OPEN'`);
   await seedInventory({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
+  await seedHr({ rng, NOW, log: log ? (m) => logger.info(m) : undefined });
+  await sequelize.query(`UPDATE fiscal_years SET status = 'CLOSED' WHERE ends_on < CURRENT_DATE`);
   await generateComplianceAlerts();
   const summary = { users: users.length, vehicles: vehicles.length, drivers: drivers.length, distributors: distributors.length, trips: trips.length, events: events.length, documents: documents.length };
   if (log) logger.info(summary, 'demo seed complete');

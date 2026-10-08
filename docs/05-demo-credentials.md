@@ -4,14 +4,19 @@ All accounts are **synthetic** and exist only in the demo database. They are not
 
 **Password for every demo account:** `GasMan@Demo2026`
 
-| Role | Email | What to try |
-|---|---|---|
-| Super Admin | `superadmin@gasman-demo.local` | Everything, incl. Users & Roles, audit log, **Reset demo data** |
-| Transport Manager | `transport.manager@gasman-demo.local` | Full operations; view users; cannot manage users |
-| Dispatcher | `dispatcher@gasman-demo.local` | Create/assign/dispatch trips, dispatch board |
-| Fleet Manager | `fleet.manager@gasman-demo.local` | Vehicles, drivers, documents, maintenance, safety management |
-| Driver | `driver@gasman-demo.local` | Mobile-style "My Trips": pre-trip check → start trip (own trip only) |
-| Management (Viewer) | `management@gasman-demo.local` | Read-only dashboards/reports + CSV export |
-| (extra) Dispatcher 2 | `dispatcher2@gasman-demo.local` | Second dispatcher for concurrency demos |
+| Role | Email | Lands on | What to try |
+|---|---|---|---|
+| Super Admin | `superadmin@gasman-demo.local` | Control Tower | Everything: users & roles, audit, setup, approvals, **Reset demo data** |
+| Transport Manager | `transport.manager@gasman-demo.local` | Control Tower | Operations, approvals (expenses, requisitions), manager mobile `/m`, finance read |
+| Dispatcher | `dispatcher@gasman-demo.local` | Control Tower | Create/assign/dispatch trips, dispatch board, tracking |
+| Dispatcher 2 | `dispatcher2@gasman-demo.local` | Control Tower | Second dispatcher for concurrency demos |
+| Fleet Manager | `fleet.manager@gasman-demo.local` | Control Tower | Vehicles, drivers, documents, maintenance, safety |
+| Accountant | `accountant@gasman-demo.local` | Control Tower | Vouchers, invoices, receipts, financial reports, bowzer accounts, vendors |
+| Store & Procurement Manager | `store.manager@gasman-demo.local` | Control Tower | Inventory, stock vouchers, tyres, procurement, vendors |
+| HR Manager | `hr.manager@gasman-demo.local` | Control Tower | Employees, attendance, leave, payroll (salaries visible only to payroll managers) |
+| Driver | `driver@gasman-demo.local` | My Trips (phone) | Pre-trip check → start trip → fuel/expense (own trip only) |
+| Management (Viewer) | `management@gasman-demo.local` | Control Tower | Read-only dashboards, reports, exceptions, assistant |
 
-Security notes: accounts lock for 10 minutes after 5 wrong passwords; passwords are bcrypt-hashed; change the shared password and disable the quick-fill box (`pages/Login.tsx`) before any non-demo use. Never reuse these credentials outside the demo.
+Login page has one-click role buttons (demo only). Permission matrix: `09-permissions.md`.
+
+Security notes: accounts lock for 10 minutes after 5 wrong passwords; passwords are bcrypt-hashed; **change the shared password and remove the quick-fill buttons (`pages/Login.tsx`) before any non-demo use.** Never reuse these credentials elsewhere.

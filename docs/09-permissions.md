@@ -2,23 +2,37 @@
 
 > Generated from `packages/shared/src/permissions.ts` (`npm run docs:permissions`). The API enforces exactly this matrix on every endpoint; the UI only mirrors it.
 
-| Module | Super Admin | Transport Manager | Dispatcher | Fleet Manager | Driver | Management (Viewer) |
-|---|---|---|---|---|---|---|
-| Dashboard | view | view | view | view | — | view |
-| Vehicles | ✓ full | ✓ full | view | ✓ full | view | view |
-| Drivers | ✓ full | ✓ full | view | ✓ full | view | view |
-| Plants & Locations | ✓ full | ✓ full | view | view | — | view |
-| Distributors | ✓ full | ✓ full | view | view | — | view |
-| Trips | ✓ full | ✓ full | ✓ full | view | view | view |
-| Dispatch | ✓ full | ✓ full | ✓ full | — | — | — |
-| Trip Progress | update progress | update progress | update progress | — | update progress | — |
-| Tracking | view | view | view | view | — | view |
-| Maintenance | ✓ full | ✓ full | view | ✓ full | — | view |
-| Documents | ✓ full | ✓ full | view | ✓ full | view | view |
-| Safety | ✓ full | ✓ full | view, report | ✓ full | report | view |
-| Reports | ✓ full | ✓ full | view | ✓ full | — | ✓ full |
-| Audit Log | view | view | — | — | — | — |
-| Users & Roles | ✓ full | view | — | — | — | — |
+| Module | Super Admin | Transport Manager | Dispatcher | Fleet Manager | Driver | Management (Viewer) | Accountant | Store & Procurement Manager | HR Manager |
+|---|---|---|---|---|---|---|---|---|---|
+| Control Tower | view | view | view | view | — | view | view | view | view |
+| Vehicles / Bowzers | ✓ full | ✓ full | view | ✓ full | view | view | view | view | — |
+| Drivers | ✓ full | ✓ full | view | ✓ full | view | view | view | — | view, create, edit |
+| Plants & Locations | ✓ full | ✓ full | view | view | — | view | view | — | — |
+| Routes & Freight | ✓ full | ✓ full | view | view | — | view | ✓ full | — | — |
+| Customers | ✓ full | ✓ full | view | view | — | view | ✓ full | — | — |
+| Trips | ✓ full | ✓ full | ✓ full | view | view | view | view | — | — |
+| Dispatch | ✓ full | ✓ full | ✓ full | — | — | — | — | — | — |
+| Trip Progress | update progress | update progress | update progress | — | update progress | — | — | — | — |
+| Live Tracking | view | view | view | view | — | view | — | — | — |
+| Fuel | ✓ full | ✓ full | view,  | ✓ full | view,  | view | view | — | — |
+| Trip Expenses | ✓ full | ✓ full | view,  | view,  | view,  | view | view,  | view | — |
+| Approvals | ✓ full | ✓ full | — | — | — | view | view,  | view | view,  |
+| Workshop / Maintenance | ✓ full | ✓ full | view | ✓ full | — | view | — | ✓ full | — |
+| Inventory | ✓ full | view | — | view | — | view | view | ✓ full | — |
+| Tyres | ✓ full | view | — | ✓ full | — | view | — | ✓ full | — |
+| Vendors | ✓ full | view | — | — | — | view | ✓ full | ✓ full | — |
+| Procurement | ✓ full | view | — | — | — | view | view | ✓ full | — |
+| Sales & Invoicing | ✓ full | ✓ full | — | — | — | view | ✓ full | — | — |
+| Finance & Accounts | ✓ full | view | — | — | — | view | ✓ full | — | — |
+| HR & Payroll | ✓ full | view | — | — | — | view | view, manage | — | ✓ full |
+| Documents | ✓ full | ✓ full | view | ✓ full | view | view | — | — | ✓ full |
+| Safety | ✓ full | ✓ full | view, report | ✓ full | report | view | — | — | — |
+| Exceptions | view | view | view | view | — | view | view | view | view |
+| AI Assistant |  |  |  |  | — |  |  |  | — |
+| Reports | ✓ full | ✓ full | view | ✓ full | — | ✓ full | ✓ full | view | view |
+| Settings | ✓ full | ✓ full | — | — | — | view | view | — | — |
+| Audit Log | view | view | — | — | — | — | — | — | — |
+| Users & Roles | ✓ full | view | — | — | — | — | — | — | — |
 
 ## Row-level scoping (beyond the matrix)
 
